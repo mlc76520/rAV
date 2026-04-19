@@ -276,6 +276,6 @@ sudo ./visualizer
 - **GPIO chip number** defaults to `4` (RPi 5) with a fallback to `0` (older Pis running lgpio).
 
 ## Inspirations
-CAVA: https://github.com/karlstav/cava
-VU_meter: https://github.com/adamples/VU_meter/
-Digital VU Meter with Analog Physics: https://hackaday.io/project/181004-digital-vu-meter-with-analog-physics
+- CAVA: https://github.com/karlstav/cava
+- VU_meter: https://github.com/adamples/VU_meter/
+- Digital VU Meter with Analog Physics: https://hackaday.io/project/181004-digital-vu-meter-with-analog-physics
