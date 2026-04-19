@@ -1,0 +1,224 @@
+================================================================================
+BLUETOOTH A2DP SETUP FOR RASPBERRY PI AUDIO VISUALIZER
+================================================================================
+
+This guide sets up a Raspberry Pi as a Bluetooth A2DP audio receiver (sink)
+with automatic pairing and no PIN authentication.
+
+================================================================================
+STEP 1: INSTALL REQUIRED PACKAGES
+================================================================================
+
+sudo apt update
+sudo apt install bluez-tools bluez-alsa-utils
+
+================================================================================
+STEP 2: CONFIGURE BLUETOOTH ADAPTER
+================================================================================
+
+Edit /etc/bluetooth/main.conf
+
+Find and uncomment/modify these lines in the [General] section:
+
+Class = 0x240414
+DiscoverableTimeout = 0
+AlwaysPairable = true
+PairableTimeout = 0
+
+In the [Policy] section, ensure:
+
+AutoEnable=true
+
+Note: The "Name" setting is overridden by the hostname plugin.
+To change the Bluetooth name, edit /etc/machine-info and add:
+PRETTY_HOSTNAME=YourDeviceName
+
+================================================================================
+STEP 3: CREATE PIN CONFIG FILE
+================================================================================
+
+sudo nano /etc/bluetooth/pin.conf
+
+Content:
+---
+* 0000
+---
+
+Set permissions:
+
+sudo chown root:root /etc/bluetooth/pin.conf
+sudo chmod 600 /etc/bluetooth/pin.conf
+
+================================================================================
+STEP 4: CREATE BT-AGENT SERVICE
+================================================================================
+
+sudo nano /etc/systemd/system/bt-agent.service
+
+Content:
+---
+[Unit]
+Description=Bluetooth Auth Agent
+After=bluetooth.service
+PartOf=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/bt-agent -c NoInputNoOutput -p /etc/bluetooth/pin.conf
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=bluetooth.target
+---
+
+================================================================================
+STEP 5: CREATE BLUEALSA SERVICE
+================================================================================
+
+sudo nano /etc/systemd/system/bluealsa.service
+
+Content:
+---
+[Unit]
+Description=BlueALSA daemon
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/bluealsa -p a2dp-sink
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+---
+
+================================================================================
+STEP 6: CREATE BT-DISCOVERABLE SERVICE
+================================================================================
+
+The main.conf DiscoverableTimeout=0 means "stay discoverable forever once enabled"
+but doesn't auto-enable discoverable mode. This service does that at boot.
+
+sudo nano /etc/systemd/system/bt-discoverable.service
+
+Content:
+---
+[Unit]
+Description=Make Bluetooth Discoverable
+After=bluetooth.service bt-agent.service
+Requires=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bluetoothctl discoverable on
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+---
+
+================================================================================
+STEP 7: ENABLE AND START SERVICES
+================================================================================
+
+sudo systemctl daemon-reload
+sudo systemctl enable bluetooth bt-agent bluealsa bt-discoverable
+sudo systemctl start bluetooth bt-agent bluealsa bt-discoverable
+
+================================================================================
+STEP 8: VERIFY SETUP
+================================================================================
+
+Check services are running:
+
+sudo systemctl status bt-agent
+sudo systemctl status bluealsa
+sudo systemctl status bt-discoverable
+
+Check Bluetooth adapter status:
+
+bluetoothctl show
+
+Should show:
+- Powered: yes
+- Discoverable: yes
+- Pairable: yes
+- Class: 0x00040414 (audio device)
+
+================================================================================
+STEP 9: TEST CONNECTION
+================================================================================
+
+1. From your phone, search for Bluetooth devices
+2. You should see your Pi's hostname (e.g., "BureauRPI")
+3. Pair and connect - no PIN should be required
+4. Play audio from your phone
+
+Verify audio stream is received:
+
+bluealsa-aplay -L
+
+Should show something like:
+bluealsa:SRV=org.bluealsa,DEV=XX:XX:XX:XX:XX:XX,PROFILE=a2dp
+    Device Name, phone, capture
+    A2DP (SBC): S16_LE 2 channels 44100 Hz
+
+================================================================================
+AUDIO ROUTING TO LOOPBACK (FOR VISUALIZER)
+================================================================================
+
+If using ALSA loopback for visualization, the audio is automatically
+available through the loopback device when bluealsa-aplay routes to it.
+
+To manually route Bluetooth audio to loopback:
+
+bluealsa-aplay -d hw:Loopback,0 &
+
+The visualizer can then capture from hw:Loopback,1
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Check logs:
+journalctl -u bt-agent -f
+journalctl -u bluealsa -f
+journalctl -u bluetooth -f
+
+Manual Bluetooth control:
+bluetoothctl
+> power on
+> discoverable on
+> pairable on
+> show
+
+Reset Bluetooth:
+sudo systemctl restart bluetooth bt-agent bluealsa
+
+Unblock BT:
+rfkill list
+sudo rfkill unblock bluetooth
+bluetoothctl power on
+
+
+If discoverable doesn't persist after reboot:
+sudo systemctl status bt-discoverable
+sudo systemctl restart bt-discoverable
+
+================================================================================
+SUMMARY OF FILES CREATED/MODIFIED
+================================================================================
+
+Modified:
+- /etc/bluetooth/main.conf
+
+Created:
+- /etc/bluetooth/pin.conf
+- /etc/systemd/system/bt-agent.service
+- /etc/systemd/system/bluealsa.service
+- /etc/systemd/system/bt-discoverable.service
+
+================================================================================
