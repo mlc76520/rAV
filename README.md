@@ -1,9 +1,10 @@
-# Dual OLED Audio Visualizer
+# Raspberry Audio Visualizer
 
 A real-time stereo audio visualizer for Raspberry Pi that drives **two SSD1309 128×64 OLED displays** over SPI. Written in a single C++ file with a hardware abstraction layer that lets the same source build on both the **Raspberry Pi 5** (via `lgpio`) and the **Raspberry Pi 3B** (via `bcm2835`).
 
 The project combines live FFT analysis of the system audio output, a full MPD client, Bluetooth (A2DP) metadata monitoring, and a small physical control surface (rotary encoder + four buttons) into a standalone "hi-fi display" appliance.
-
+---
+![Intro](img/20260417_084609.jpg)
 ---
 
 ## Features
@@ -34,7 +35,22 @@ The project combines live FFT analysis of the system audio output, a full MPD cl
 A short volume overlay is drawn over the current visualization whenever the rotary knob is turned.
 
 ---
+## Parts list
+- 1 Raspberry pi 3B or 5
+- 1 Rotary encoder 
+- 2 128x64 waveshare SPI OLED screens
+- 4 pushbuttons
+- 4 smd LEDs
+- Board for screens
+- Board for pushbuttons
+- Optional: Audio HAT for RPI 5
 
+---
+## wiring
+
+![Intro](img/rAAV_bb.png)
+
+---
 ## Hardware
 
 ### Displays
@@ -258,3 +274,8 @@ sudo ./visualizer
 - **Sensitivity / noise reduction** can be adjusted via `AudioProcessor::setSensitivity(10–300)` and `setNoiseReduction(0–100)`.
 - **MPD host/port** are hard-coded in `MPDClient`'s constructor (`localhost:6600`); change there if needed.
 - **GPIO chip number** defaults to `4` (RPi 5) with a fallback to `0` (older Pis running lgpio).
+
+## Inspirations
+CAVA: https://github.com/karlstav/cava
+VU_meter: https://github.com/adamples/VU_meter/
+Digital VU Meter with Analog Physics: https://hackaday.io/project/181004-digital-vu-meter-with-analog-physics
