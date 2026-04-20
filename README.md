@@ -35,6 +35,11 @@ The project combines live FFT analysis of the system audio output, a full MPD cl
 A short volume overlay is drawn over the current visualization whenever the rotary knob is turned.
 
 <img src="img/20260420_102145.jpg" alt="VUmeter" width="300">
+<img src="img/20260420_102159.jpg" alt="Spectrum" width="300">
+<img src="img/20260420_102206.jpg" alt="Empty spectrum" width="300">
+<img src="img/20260420_102212.jpg" alt="Waveform" width="300">
+<img src="img/20260417_084829.jpg" alt="Trackinfo" width="300">
+<img src="img/20260420_102254.jpg" alt="Library" width="300">
 
 ---
 ## Parts list
