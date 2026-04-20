@@ -1768,7 +1768,7 @@ class PlaylistEditorViz : public Visualization {
 
     void renderBrowser(Display* d) {
         d->clear();
-        if (!albums_loaded && loading) { d->drawText(25, 35, "Chargement...", FontManager::SMALL); return; }
+        if (!albums_loaded && loading) { d->drawText(25, 35, "Loading...", FontManager::SMALL); return; }
         if (editor_state == EditorState::FEEDBACK) {
             int ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - feedback_ts).count();
@@ -1779,24 +1779,24 @@ class PlaylistEditorViz : public Visualization {
             return;
         }
         if (editor_state == EditorState::BROWSE_ALBUMS) {
-            d->drawText(0, HEADER_Y, "BIBLIOTHEQUE", FontManager::SMALL);
+            d->drawText(0, HEADER_Y, "LIBRARY", FontManager::SMALL);
             d->drawLine(0, 9, 127, 9);
             std::lock_guard<std::mutex> lk(data_mtx);
-            if (albums.empty()) { d->drawText(10,35,"Aucun album",FontManager::SMALL); return; }
+            if (albums.empty()) { d->drawText(10,35,"No album",FontManager::SMALL); return; }
             for (int i = 0; i < VISIBLE_LINES && album_scroll+i < (int)albums.size(); i++)
                 drawSelectionRow(d, i, albums[album_scroll+i], album_scroll+i == album_cursor);
             drawScrollbar(d, (int)albums.size(), VISIBLE_LINES, album_scroll);
         } else if (editor_state == EditorState::BROWSE_TRACKS) {
             d->drawText(0, HEADER_Y, truncatePx(selected_album,118).c_str(), FontManager::SMALL);
             d->drawLine(0, 9, 127, 9);
-            if (loading) { d->drawText(25,35,"Chargement...",FontManager::SMALL); return; }
+            if (loading) { d->drawText(25,35,"Loading...",FontManager::SMALL); return; }
             std::lock_guard<std::mutex> lk(data_mtx);
             int total = 2+(int)tracks.size();
             for (int i = 0; i < VISIBLE_LINES && track_scroll+i < total; i++) {
                 int idx = track_scroll+i;
                 std::string lbl;
-                if (idx == 0) lbl = "> Jouer album";
-                else if (idx == 1) lbl = "+ Ajouter album";
+                if (idx == 0) lbl = "> PLay album";
+                else if (idx == 1) lbl = "+ Add album";
                 else { auto& t = tracks[idx-2]; lbl = t.track_num.empty() ? t.title : t.track_num+". "+t.title; }
                 drawSelectionRow(d, i, lbl, idx == track_cursor);
             }
@@ -1822,8 +1822,8 @@ class PlaylistEditorViz : public Visualization {
         d->drawLine(0, 40, 127, 40);
 
         if (editor_state == EditorState::BROWSE_ALBUMS)
-            d->drawText(0, 64, "SEL:entrer BCK:quitter", FontManager::SMALL);
-        else d->drawText(0, 64, "SEL:ajouter BCK:retour", FontManager::SMALL);
+            d->drawText(0, 64, "SEL:enter BCK:quit", FontManager::SMALL);
+        else d->drawText(0, 64, "SEL:add BCK:back", FontManager::SMALL);
     }
 
     public:
@@ -1868,10 +1868,10 @@ class PlaylistEditorViz : public Visualization {
             if (btn_up) { track_cursor = std::max(track_cursor-1, 0);
                 if (track_cursor < track_scroll) track_scroll = track_cursor; }
             if (btn_sel) {
-                if (track_cursor == 0) { mpd_client->clearAndPlayAlbum(selected_album); setFeedback("  Lecture !"); }
-                else if (track_cursor == 1) { mpd_client->addAlbumToQueue(selected_album); setFeedback("  Album ajoute !"); }
+                if (track_cursor == 0) { mpd_client->clearAndPlayAlbum(selected_album); setFeedback("  Play !"); }
+                else if (track_cursor == 1) { mpd_client->addAlbumToQueue(selected_album); setFeedback("  Album added !"); }
                 else { int ti = track_cursor-2;
-                    if (ti < (int)tracks.size()) { mpd_client->addTrackToQueue(tracks[ti].file); setFeedback("  Piste ajoutee !"); } }
+                    if (ti < (int)tracks.size()) { mpd_client->addTrackToQueue(tracks[ti].file); setFeedback("  Track added !"); } }
             }
         }
         return want_exit;
