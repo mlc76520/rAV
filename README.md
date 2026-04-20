@@ -38,12 +38,18 @@ A short volume overlay is drawn over the current visualization whenever the rota
 ## Parts list
 - 1 Raspberry pi 3B or 5
 - 1 Rotary encoder 
-- 2 128x64 waveshare SPI OLED screens
+- 2 128x64 waveshare SPI OLED screens white
 - 4 pushbuttons
-- 4 smd LEDs
+- 4 smd1206 LEDs 6000k
 - Board for screens
 - Board for pushbuttons
 - Optional: Audio HAT for RPI 5
+
+---
+## 3D printed parts
+- M2.5 Threaded Insert
+- M2.5×8mm screws
+- Feet Stickers, 18 x 10 mm Rubber Pads Self Adhesive Half Sphere
 
 ---
 ## wiring
