@@ -34,6 +34,8 @@ The project combines live FFT analysis of the system audio output, a full MPD cl
 
 A short volume overlay is drawn over the current visualization whenever the rotary knob is turned.
 
+![VUmeter](img/20260420_102145.jpg)
+
 ---
 ## Parts list
 - 1 Raspberry pi 3B or 5
