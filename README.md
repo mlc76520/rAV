@@ -4,7 +4,7 @@ A real-time stereo audio visualizer for Raspberry Pi that drives **two SSD1309 1
 
 The project combines live FFT analysis of the system audio output, a full MPD client, Bluetooth (A2DP) metadata monitoring, and a small physical control surface (rotary encoder + four buttons) into a standalone "hi-fi display" appliance.
 ---
-![Intro](img/20260417_084609.jpg)
+![Intro](img/20260417_084829.jpg)
 ---
 
 ## Features
