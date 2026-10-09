@@ -1,0 +1,32 @@
+#!/bin/sh
+# rav-audio postrm: undo what postinst generated. bluez main.conf settings
+# and the Bluetooth PIN are left as they are.
+set -e
+
+STATE=/var/lib/rav-audio
+GEN=50-rav-audio-runtime.conf
+
+case "$1" in
+remove|purge)
+    uid=$(cat "$STATE/mpd-uid" 2>/dev/null || id -u mpd 2>/dev/null || true)
+    rm -f /etc/systemd/system/mpd.service.d/$GEN \
+          /etc/systemd/system/audio-visualizer.service.d/$GEN
+    if [ -n "$uid" ]; then rm -f "/etc/systemd/system/user@$uid.service.d/$GEN"; fi
+    rmdir --ignore-fail-on-non-empty /etc/systemd/system/mpd.service.d \
+          /etc/systemd/system/audio-visualizer.service.d \
+          "/etc/systemd/system/user@$uid.service.d" 2>/dev/null || true
+
+    if [ -d /run/systemd/system ]; then
+        loginctl disable-linger mpd || true
+        systemctl daemon-reload
+        for s in bluealsa.service bluealsa-aplay.service; do
+            if [ -e "$STATE/$s.was-enabled" ]; then systemctl enable --now "$s" || true; fi
+        done
+        systemctl try-restart mpd.service || true
+    fi
+    rm -f "$STATE"/*.was-enabled
+    if [ "$1" = purge ]; then rm -rf "$STATE"; fi
+    ;;
+esac
+
+exit 0

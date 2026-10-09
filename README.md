@@ -11,10 +11,11 @@ The project combines live FFT analysis of the system audio output, a full MPD cl
 
 - **Six visualization modes**, switchable with a button or auto-cycled after 30 s of inactivity
 - **Two independent OLEDs** — left and right channels rendered separately
-- **Three-resolution FFT** (8192 / 2048 / 512 points) for accurate bass, mid, and treble bins
+- **Three-resolution FFT** (4096 / 2048 / 512 points) for accurate bass, mid, and treble bins with low latency
 - **64-band and 7-band spectrum analyzers** with peak-hold, smoothing, and gravity decay
 - **MPD integration** — now-playing info, play/pause, next/previous, volume, and a built-in album/track browser
-- **Bluetooth A2DP monitoring** via BlueZ D-Bus — track metadata and auto-pause MPD on BT connect
+- **Bluetooth A2DP** via BlueZ D-Bus — track metadata, auto-pause MPD on BT connect, and the transport buttons drive the phone (AVRCP) while it is connected
+- **PipeWire capture** of the output monitor (ALSA loopback fallback), with a ready-made Debian package for the whole audio stack
 - **FreeType text rendering** with small / regular / large sizes and UTF-8 support
 - **Sleep mode** — after 10 s of silence, both displays fade out with a CRT-style shutdown animation; they wake when audio returns
 - **Unified build** — one source file, two backends, selected at compile time with `-DUSE_BCM2835`
@@ -104,7 +105,8 @@ Common to both targets:
 ```
 g++  pkg-config
 libdbus-1-dev         # Bluetooth via BlueZ D-Bus
-libasound2-dev        # ALSA capture
+libpipewire-0.3-dev   # PipeWire capture (output monitor)
+libasound2-dev        # ALSA capture fallback
 libfftw3-dev          # FFT (single-precision)
 libfreetype-dev       # Text rendering
 libmpdclient-dev      # MPD client
@@ -122,13 +124,13 @@ Plus **one** of:
 ### Raspberry Pi 5 (lgpio backend)
 
 ```bash
-sudo apt install g++ pkg-config libdbus-1-dev libasound2-dev \
+sudo apt install g++ pkg-config libdbus-1-dev libasound2-dev libpipewire-0.3-dev \
                  libfftw3-dev libfreetype-dev libmpdclient-dev liblgpio-dev
 
 g++ -o visualizer rav_unified.cpp \
     -O3 -march=native -std=c++23 \
     -I/usr/include/freetype2 \
-    $(pkg-config --cflags --libs dbus-1) \
+    $(pkg-config --cflags --libs dbus-1 libpipewire-0.3) \
     -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -pie -Wl,-z,relro,-z,now \
     -llgpio -lpthread -lasound -lfftw3f -lm -lfreetype -lmpdclient
 ```
@@ -136,27 +138,40 @@ g++ -o visualizer rav_unified.cpp \
 ### Raspberry Pi 3B (bcm2835 backend)
 
 ```bash
-sudo apt install g++ pkg-config libdbus-1-dev libasound2-dev \
+sudo apt install g++ pkg-config libdbus-1-dev libasound2-dev libpipewire-0.3-dev \
                  libfftw3-dev libfreetype-dev libmpdclient-dev
 # Install bcm2835 from https://www.airspayce.com/mikem/bcm2835/
 
 g++ -o visualizer rav_unified.cpp \
     -O3 -march=native -std=c++17 -DUSE_BCM2835 \
     -I/usr/include/freetype2 \
-    $(pkg-config --cflags --libs dbus-1) \
+    $(pkg-config --cflags --libs dbus-1 libpipewire-0.3) \
     -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -pie -Wl,-z,relro,-z,now \
     -lbcm2835 -lpthread -lasound -lfftw3f -lm -lfreetype -lmpdclient
 ```
 
 The only difference is the `-DUSE_BCM2835` flag and the GPIO library. Everything else — the visualizations, MPD client, Bluetooth monitor, audio pipeline — is shared.
 
+### Debian package (Raspberry Pi 3B, recommended)
+
+`packaging/build-deb.sh` compiles the bcm2835 build and packs it with the whole audio stack configuration into `rav-audio_<version>_arm64.deb`:
+
+```bash
+packaging/build-deb.sh 1.0.1
+sudo apt install ./packaging/rav-audio_1.0.1_arm64.deb   # pulls in all runtime dependencies
+```
+
+The package installs the visualizer as `audio-visualizer.service`, runs MPD and Bluetooth A2DP through a PipeWire instance owned by user `mpd`, and works with a HifiBerry (or any I2S DAC) or the onboard headphone jack. See `packaging/root/usr/share/doc/rav-audio/README` for exactly what it sets up; set your `music_directory` in `/etc/rav-audio/mpd.conf`. `config.txt` needs `dtparam=spi=on` and an audio output (`dtoverlay=hifiberry-…` or `dtparam=audio=on`).
+
 ---
 
 ## Runtime Setup
 
-### 1. ALSA loopback for audio capture
+### 1. Audio capture
 
-The visualizer opens an ALSA capture device named `rav` (falling back to `hw:Loopback,1`). The easiest way to feed it system audio is the kernel `snd-aloop` module:
+The visualizer first connects to **PipeWire** and passively captures the monitor of the default output, so it shows exactly what is played (MPD, Bluetooth, anything else) and still lets the output suspend when idle. When the PipeWire daemon runs as another user (the `rav-audio` package runs it as `mpd`), point the visualizer at it with `PIPEWIRE_RUNTIME_DIR=/run/user/<uid>`.
+
+Without PipeWire it falls back to an ALSA capture device named `rav` (then `hw:Loopback,1`), fed through the kernel `snd-aloop` module:
 
 ```bash
 sudo modprobe snd-aloop
@@ -165,7 +180,7 @@ sudo modprobe snd-aloop
 
 Route your player (MPD, BT, etc.) to the loopback **playback** side; the visualizer reads the matching **capture** side. A named PCM called `rav` in `~/.asoundrc` or `/etc/asound.conf` pointing at the loopback capture device is the cleanest setup.
 
-Audio is read as 44.1 kHz, 16-bit, stereo, 2048-frame periods.
+ALSA audio is read as 44.1 kHz, 16-bit, stereo, 2048-frame periods. Avoid this path with a `multi` playback device and `snd-aloop` `timer_source` on recent kernels (6.18.50): the capture stalls and playback drops out.
 
 ### 2. MPD
 
@@ -182,7 +197,7 @@ Drop a `trixel-square.ttf` next to the binary for the intended pixel-font look, 
 
 ### 4. Bluetooth (optional)
 
-If BlueZ is running, the visualizer subscribes to `PropertiesChanged` on `org.bluez.MediaPlayer1` / `MediaTransport1`. When a phone connects and starts A2DP playback, MPD is auto-paused and the displays switch to showing Bluetooth track metadata.
+If BlueZ is running, the visualizer subscribes to `PropertiesChanged` on `org.bluez.MediaPlayer1` / `MediaTransport1`. When a phone connects and starts A2DP playback, MPD is auto-paused and the displays switch to showing Bluetooth track metadata. While a phone is connected, PLAY / FW / RW send AVRCP Play/Pause, Next and Previous to it instead of MPD. The A2DP sink itself is provided by PipeWire/WirePlumber (`bluetooth_a2dp_setup.txt` describes the older bluez-alsa setup).
 
 ---
 
@@ -194,8 +209,8 @@ If BlueZ is running, the visualizer subscribes to `PropertiesChanged` on `org.bl
 │                                                            │
 │   ┌──────────────┐  ┌───────────────┐  ┌──────────────┐    │
 │   │ AudioProcessor│  │   MPDClient   │  │  Bluetooth   │    │
-│   │  (ALSA + 3×  │  │   (idle loop  │  │   Monitor    │    │
-│   │   FFTW plans)│  │   thread)     │  │  (D-Bus thr) │    │
+│   │  (PipeWire + │  │   (idle loop  │  │   Monitor    │    │
+│   │  3× FFTW)    │  │   thread)     │  │  (D-Bus thr) │    │
 │   └──────┬───────┘  └──────┬────────┘  └──────┬───────┘    │
 │          │                 │                  │            │
 │          ▼                 ▼                  ▼            │
@@ -221,7 +236,7 @@ If BlueZ is running, the visualizer subscribes to `PropertiesChanged` on `org.bl
 | Thread | Role |
 |---|---|
 | Main | Rendering loop (~60 FPS), input polling, sleep/wake state machine |
-| Audio | Blocking ALSA reads → circular buffer |
+| Audio | PipeWire stream callback (or blocking ALSA reads) → circular buffer |
 | MPD | `mpd_send_idle` loop + periodic bitrate refresh |
 | Bluetooth | D-Bus message dispatch |
 | Rotary poll (RPi 3B only) | 1 kHz GPIO polling (RPi 5 uses `lgpio` alerts/IRQ instead) |
@@ -229,10 +244,10 @@ If BlueZ is running, the visualizer subscribes to `PropertiesChanged` on `org.bl
 
 ### Audio pipeline
 
-1. ALSA captures 2048-frame stereo periods at 44.1 kHz.
-2. Samples land in a circular buffer sized `2 × 8192`.
-3. Three FFTW plans run in parallel on Hann-windowed slices:
-   - **Bass** (8192 pts) for the low bands — fine frequency resolution
+1. PipeWire delivers the output monitor in ~1024-frame quanta at 44.1 kHz (ALSA fallback: 2048-frame periods).
+2. Samples land in a 16384-frame circular buffer, read through a virtual head that advances at the sample rate just behind the newest sample (half a delivery + 15 ms), so the display moves smoothly between deliveries.
+3. Three FFTW plans run on Hann-windowed slices ending at the head:
+   - **Bass** (4096 pts) for the low bands — fine frequency resolution
    - **Mid** (2048 pts) for mid-range bands
    - **Treble** (512 pts) for high bands — fast response
 4. Each output bin is energy-summed into a freq band, multiplied by a per-band correction curve, then smoothed with an integral filter + gravity decay before being clamped to 0–255 for display.
@@ -257,7 +272,7 @@ rav_unified.cpp
 ├── BluetoothMonitor   — BlueZ D-Bus listener
 ├── FontManager        — FreeType wrapper, UTF-8 decoder
 ├── Display            — SSD1309 driver + framebuffer primitives
-├── AudioProcessor     — ALSA capture + 3× FFTW analysis
+├── AudioProcessor     — PipeWire/ALSA capture + 3× FFTW analysis
 ├── TextScroller       — ping-pong marquee
 ├── Visualization      — base class
 │   ├── VUMeterViz
@@ -276,6 +291,8 @@ rav_unified.cpp
 ```bash
 # Usually needs root for GPIO/SPI access (or appropriate udev rules / groups)
 sudo ./visualizer
+# or, with the Debian package installed
+sudo systemctl status audio-visualizer
 ```
 
 `SIGINT` / `SIGTERM` triggers a clean shutdown: threads are joined, displays cleared and put to sleep, GPIO released.

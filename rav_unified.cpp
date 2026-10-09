@@ -3,23 +3,23 @@ Dual SSD1309 OLED Audio Visualizer for Raspberry Pi 3B / 5
 Unified C++ implementation with hardware abstraction layer
 
 === RPi 5 (lgpio) ===
-sudo apt install g++ pkg-config libdbus-1-dev libasound2-dev libfftw3-dev libfreetype-dev libmpdclient-dev liblgpio-dev
+sudo apt install g++ pkg-config libdbus-1-dev libasound2-dev libfftw3-dev libfreetype-dev libmpdclient-dev libpipewire-0.3-dev liblgpio-dev
 
 g++ -o visualizer visualizer.cpp \
     -O3 -march=native -std=c++23 \
     -I/usr/include/freetype2 \
-    $(pkg-config --cflags --libs dbus-1) \
+    $(pkg-config --cflags --libs dbus-1 libpipewire-0.3) \
     -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -pie -Wl,-z,relro,-z,now \
     -llgpio -lpthread -lasound -lfftw3f -lm -lfreetype -lmpdclient
 
 === RPi 3B (bcm2835) ===
-sudo apt install g++ pkg-config libdbus-1-dev libasound2-dev libfftw3-dev libfreetype-dev libmpdclient-dev
+sudo apt install g++ pkg-config libdbus-1-dev libasound2-dev libfftw3-dev libfreetype-dev libmpdclient-dev libpipewire-0.3-dev
 # Install bcm2835 library from https://www.airspayce.com/mikem/bcm2835/
 
 g++ -o visualizer visualizer.cpp \
     -O3 -march=native -std=c++17 -DUSE_BCM2835 \
     -I/usr/include/freetype2 \
-    $(pkg-config --cflags --libs dbus-1) \
+    $(pkg-config --cflags --libs dbus-1 libpipewire-0.3) \
     -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -pie -Wl,-z,relro,-z,now \
     -lbcm2835 -lpthread -lasound -lfftw3f -lm -lfreetype -lmpdclient
 */
@@ -31,10 +31,13 @@ g++ -o visualizer visualizer.cpp \
 #endif
 
 #include <alsa/asoundlib.h>
+#include <pipewire/pipewire.h>
+#include <spa/param/audio/format-utils.h>
 #include <fftw3.h>
 #include <cmath>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <algorithm>
 #include <thread>
 #include <atomic>
@@ -49,6 +52,9 @@ g++ -o visualizer visualizer.cpp \
 #include <iomanip>
 #include <vector>
 #include <memory>
+#include <unordered_map>
+#include <stdexcept>
+#include <sys/select.h>
 #include <dbus/dbus.h>
 #include <functional>
 #include <unistd.h>
@@ -91,28 +97,22 @@ public:
 
     // GPIO
     virtual int claimOutput(int pin, int initialValue = 0) = 0;
-    virtual int claimInput(int pin) = 0;
     virtual int claimInputPullUp(int pin) = 0;
     virtual void digitalWrite(int pin, int value) = 0;
     virtual int digitalRead(int pin) = 0;
 
     // SPI
-    virtual void spiTransfer(int cs_pin, uint8_t data) = 0;
     virtual void spiWrite(int cs_pin, const char* buf, int len) = 0;
 
     // Timing
     virtual void delay(int ms) = 0;
-    virtual void delayMicroseconds(int us) = 0;
 
-    // Rotary encoder support (interrupt-based on lgpio, polling on bcm2835)
-    virtual bool supportsAlerts() const = 0;
+    // true when the SPI driver toggles CS itself (lgpio); false when CS is a
+    // plain GPIO the backend drives around each transfer (bcm2835)
+    virtual bool hardwareChipSelect() const = 0;
 
-    // lgpio-specific alert functions (no-op on bcm2835)
+    // lgpio chip handle for the rotary encoder alerts (-1 on bcm2835)
     virtual int gpioHandle() const = 0;
-    virtual int claimAlert(int pin, int flags, int edge) { return -1; }
-    virtual int setDebounce(int pin, int us) { return -1; }
-    virtual int setAlertsFunc(int pin, void* func, void* user) { return -1; }
-    virtual int clearAlertsFunc(int pin) { return -1; }
 };
 
 // --- lgpio backend (RPi5) ---
@@ -165,9 +165,6 @@ public:
     int claimOutput(int pin, int initialValue = 0) override {
         return lgGpioClaimOutput(gpio_handle_, 0, pin, initialValue);
     }
-    int claimInput(int pin) override {
-        return lgGpioClaimInput(gpio_handle_, 0, pin);
-    }
     int claimInputPullUp(int pin) override {
         return lgGpioClaimInput(gpio_handle_, LG_SET_PULL_UP, pin);
     }
@@ -178,34 +175,15 @@ public:
         return lgGpioRead(gpio_handle_, pin);
     }
 
-    void spiTransfer(int cs_pin, uint8_t data) override {
-        char tx = data, rx = 0;
-        int h = (cs_pin == Config::LEFT_CS) ? spi_cs0_ : spi_cs1_;
-        lgSpiXfer(h, &tx, &rx, 1);
-    }
     void spiWrite(int cs_pin, const char* buf, int len) override {
         int h = (cs_pin == Config::LEFT_CS) ? spi_cs0_ : spi_cs1_;
         lgSpiWrite(h, buf, len);
     }
 
     void delay(int ms) override { lguSleep(ms / 1000.0); }
-    void delayMicroseconds(int us) override { lguSleep(us / 1000000.0); }
 
-    bool supportsAlerts() const override { return true; }
+    bool hardwareChipSelect() const override { return true; }
     int gpioHandle() const override { return gpio_handle_; }
-
-    int claimAlert(int pin, int flags, int edge) override {
-        return lgGpioClaimAlert(gpio_handle_, flags, edge, pin, -1);
-    }
-    int setDebounce(int pin, int us) override {
-        return lgGpioSetDebounce(gpio_handle_, pin, us);
-    }
-    int setAlertsFunc(int pin, void* func, void* user) override {
-        return lgGpioSetAlertsFunc(gpio_handle_, pin, (lgGpioAlertsFunc_t)func, user);
-    }
-    int clearAlertsFunc(int pin) override {
-        return lgGpioSetAlertsFunc(gpio_handle_, pin, nullptr, nullptr);
-    }
 };
 
 #else // USE_BCM2835
@@ -241,10 +219,6 @@ public:
         bcm2835_gpio_write(pin, initialValue);
         return 0;
     }
-    int claimInput(int pin) override {
-        bcm2835_gpio_fsel(pin, BCM2835_GPIO_FSEL_INPT);
-        return 0;
-    }
     int claimInputPullUp(int pin) override {
         bcm2835_gpio_fsel(pin, BCM2835_GPIO_FSEL_INPT);
         bcm2835_gpio_set_pud(pin, BCM2835_GPIO_PUD_UP);
@@ -257,25 +231,17 @@ public:
         return bcm2835_gpio_lev(pin);
     }
 
-    void spiTransfer(int cs_pin, uint8_t data) override {
-        bcm2835_gpio_write(cs_pin, 0);
-        bcm2835_spi_transfer(data);
-        bcm2835_gpio_write(cs_pin, 1);
-    }
     void spiWrite(int cs_pin, const char* buf, int len) override {
         bcm2835_gpio_write(cs_pin, 0);
-        bcm2835_spi_transfern((char*)buf, len);
+        bcm2835_spi_writenb((char*)buf, len);
         bcm2835_gpio_write(cs_pin, 1);
     }
 
-    void delay(int ms) override { 
+    void delay(int ms) override {
         std::this_thread::sleep_for(std::chrono::milliseconds(ms));
     }
-    void delayMicroseconds(int us) override { 
-        std::this_thread::sleep_for(std::chrono::microseconds(us));
-    }
 
-    bool supportsAlerts() const override { return false; }
+    bool hardwareChipSelect() const override { return false; }
     int gpioHandle() const override { return -1; }
 };
 
@@ -317,82 +283,96 @@ class MPDClient {
         std::string date;
         std::string bitrate_str;
         std::string format_str;
-        unsigned int elapsed_time;
+        // Elapsed is extrapolated on read from the last MPD sample, so the
+        // counter never drifts and needs no per-frame bookkeeping
+        unsigned int elapsed_ms;
         unsigned int total_time;
         bool is_playing;
 
         std::chrono::steady_clock::time_point last_status_update;
         std::chrono::steady_clock::time_point last_bitrate_check;
 
+        static std::string formatBitrate(unsigned kbps) {
+            return kbps > 0 ? std::to_string(kbps) + " kbps" : "N/A";
+        }
+
         void updateFormattedText() {
-            std::lock_guard<std::mutex> lock(data_mutex);
+            // All MPD round-trips happen before taking data_mutex: the render
+            // thread blocks on this mutex in drawTitle, so holding it across
+            // network I/O caused visible frame drops on track changes
+            std::string n_formatted = "Waiting for MPD...";
+            std::string n_track, n_title = "No song playing", n_artist, n_album, n_date;
+            std::string n_bitrate, n_format;
+            unsigned int n_elapsed_ms = 0, n_total = 0;
+            bool n_playing = false, got_song = false, got_status = false;
 
-            if (!conn || mpd_connection_get_error(conn) != MPD_ERROR_SUCCESS) {
-                formatted_text = "Waiting for MPD...";
-                track_number = ""; title = "No song playing"; artist = ""; album = "";
-                date = ""; bitrate_str = ""; format_str = "";
-                elapsed_time = 0; total_time = 0; is_playing = false;
-                return;
-            }
-
-            struct mpd_song* song = mpd_run_current_song(conn);
-            if (!song) {
-                formatted_text = "No song playing";
-                track_number = ""; title = "No song playing"; artist = ""; album = "";
-                date = ""; bitrate_str = ""; format_str = "";
-                elapsed_time = 0; total_time = 0; is_playing = false;
-                mpd_response_finish(conn);
-                return;
-            }
-
-            unsigned track = mpd_song_get_pos(song) + 1;
-            const char* title_tag = mpd_song_get_tag(song, MPD_TAG_TITLE, 0);
-            const char* artist_tag = mpd_song_get_tag(song, MPD_TAG_ARTIST, 0);
-            const char* album_tag = mpd_song_get_tag(song, MPD_TAG_ALBUM, 0);
-            const char* date_tag = mpd_song_get_tag(song, MPD_TAG_DATE, 0);
-
-            track_number = std::to_string(track);
-            title = title_tag ? title_tag : "Unknown Title";
-            artist = artist_tag ? artist_tag : "Unknown Artist";
-            album = album_tag ? album_tag : "Unknown Album";
-            date = (date_tag && strlen(date_tag) >= 4) ? std::string(date_tag).substr(0, 4) : "";
-
-            std::stringstream ss;
-            ss << std::setfill('0') << std::setw(2) << track << ". ";
-            ss << (title_tag ? title_tag : "Unknown Title");
-            if (artist_tag) ss << " - " << artist_tag;
-            if (date_tag && strlen(date_tag) >= 4) ss << " (" << std::string(date_tag).substr(0, 4) << ")";
-
-            formatted_text = ss.str();
-            mpd_song_free(song);
-            mpd_response_finish(conn);
-
-            struct mpd_status* status = mpd_run_status(conn);
-            if (status) {
-                elapsed_time = mpd_status_get_elapsed_time(status);
-                total_time = mpd_status_get_total_time(status);
-                is_playing = (mpd_status_get_state(status) == MPD_STATE_PLAY);
-
-                unsigned int kbps = mpd_status_get_kbit_rate(status);
-                bitrate_str = (kbps > 0) ? (std::to_string(kbps) + " kbps") : "N/A";
-
-                const struct mpd_audio_format* format = mpd_status_get_audio_format(status);
-                if (format) {
-                    std::stringstream fmt;
-                    fmt << (format->sample_rate / 1000) << "kHz/"
-                        << (int)format->bits << "bit/"
-                        << (int)format->channels << "ch";
-                    format_str = fmt.str();
+            if (conn && mpd_connection_get_error(conn) == MPD_ERROR_SUCCESS) {
+                struct mpd_song* song = mpd_run_current_song(conn);
+                if (!song) {
+                    n_formatted = "No song playing";
+                    mpd_response_finish(conn);
                 } else {
-                    format_str = "N/A";
-                }
+                    got_song = true;
+                    unsigned track = mpd_song_get_pos(song) + 1;
+                    const char* title_tag = mpd_song_get_tag(song, MPD_TAG_TITLE, 0);
+                    const char* artist_tag = mpd_song_get_tag(song, MPD_TAG_ARTIST, 0);
+                    const char* album_tag = mpd_song_get_tag(song, MPD_TAG_ALBUM, 0);
+                    const char* date_tag = mpd_song_get_tag(song, MPD_TAG_DATE, 0);
 
-                mpd_status_free(status);
-                last_status_update = std::chrono::steady_clock::now();
-            } else {
-                bitrate_str = "N/A"; format_str = "N/A"; is_playing = false;
+                    n_track = std::to_string(track);
+                    n_title = title_tag ? title_tag : "Unknown Title";
+                    n_artist = artist_tag ? artist_tag : "Unknown Artist";
+                    n_album = album_tag ? album_tag : "Unknown Album";
+                    n_date = (date_tag && strlen(date_tag) >= 4) ? std::string(date_tag).substr(0, 4) : "";
+
+                    std::stringstream ss;
+                    ss << std::setfill('0') << std::setw(2) << track << ". ";
+                    ss << n_title;
+                    if (artist_tag) ss << " - " << artist_tag;
+                    if (!n_date.empty()) ss << " (" << n_date << ")";
+                    n_formatted = ss.str();
+
+                    mpd_song_free(song);
+
+                    struct mpd_status* status = mpd_run_status(conn);
+                    if (status) {
+                        got_status = true;
+                        n_elapsed_ms = mpd_status_get_elapsed_ms(status);
+                        n_total = mpd_status_get_total_time(status);
+                        n_playing = (mpd_status_get_state(status) == MPD_STATE_PLAY);
+                        n_bitrate = formatBitrate(mpd_status_get_kbit_rate(status));
+
+                        const struct mpd_audio_format* format = mpd_status_get_audio_format(status);
+                        if (format) {
+                            std::stringstream fmt;
+                            fmt << (format->sample_rate / 1000) << "kHz/"
+                                << (int)format->bits << "bit/"
+                                << (int)format->channels << "ch";
+                            n_format = fmt.str();
+                        } else {
+                            n_format = "N/A";
+                        }
+                        mpd_status_free(status);
+                    } else {
+                        n_bitrate = "N/A"; n_format = "N/A";
+                    }
+                }
             }
-            mpd_response_finish(conn);
+
+            std::lock_guard<std::mutex> lock(data_mutex);
+            formatted_text = n_formatted;
+            track_number = n_track; title = n_title; artist = n_artist;
+            album = n_album; date = n_date;
+            if (got_song) {
+                bitrate_str = n_bitrate; format_str = n_format; is_playing = n_playing;
+                if (got_status) {
+                    elapsed_ms = n_elapsed_ms; total_time = n_total;
+                    last_status_update = std::chrono::steady_clock::now();
+                }
+            } else {
+                bitrate_str = ""; format_str = "";
+                elapsed_ms = 0; total_time = 0; is_playing = false;
+            }
         }
 
         void refreshBitrateOnly() {
@@ -401,14 +381,12 @@ class MPDClient {
             struct mpd_status* status = mpd_run_status(conn);
             if (status) {
                 std::lock_guard<std::mutex> lock(data_mutex);
-                elapsed_time = mpd_status_get_elapsed_time(status);
+                elapsed_ms = mpd_status_get_elapsed_ms(status);
                 is_playing = (mpd_status_get_state(status) == MPD_STATE_PLAY);
-                unsigned int kbps = mpd_status_get_kbit_rate(status);
-                bitrate_str = (kbps > 0) ? (std::to_string(kbps) + " kbps") : "N/A";
+                bitrate_str = formatBitrate(mpd_status_get_kbit_rate(status));
                 mpd_status_free(status);
-                last_bitrate_check = std::chrono::steady_clock::now();
+                last_status_update = last_bitrate_check = std::chrono::steady_clock::now();
             }
-            mpd_response_finish(conn);
         }
 
         void mpdThreadFunc() {
@@ -462,14 +440,17 @@ class MPDClient {
                             now - last_bitrate_check).count();
 
                         if (diff >= 1000) {
-                            mpd_run_noidle(conn);
+                            // A player event can land between select() and
+                            // noidle: MPD then returns it here instead
+                            enum mpd_idle events = mpd_run_noidle(conn);
                             if (mpd_connection_get_error(conn) != MPD_ERROR_SUCCESS) {
                                 printf("MPD connection error after noidle: %s\n",
                                     mpd_connection_get_error_message(conn));
                                 mpd_connection_free(conn); conn = nullptr;
                                 break;
                             }
-                            refreshBitrateOnly();
+                            if (events & MPD_IDLE_PLAYER) updateFormattedText();
+                            else refreshBitrateOnly();
                             break;
                         }
                         continue;
@@ -491,20 +472,46 @@ class MPDClient {
             printf("MPD thread stopped\n");
         }
 
+        // Persistent control connection, reused across commands to avoid a TCP
+        // connect per button press / rotary detent
+        struct mpd_connection* ctrl_conn = nullptr;
+        std::mutex ctrl_mutex;
+
+        bool ensureCtrl() {
+            if (ctrl_conn && mpd_connection_get_error(ctrl_conn) != MPD_ERROR_SUCCESS) {
+                mpd_connection_free(ctrl_conn); ctrl_conn = nullptr;
+            }
+            if (!ctrl_conn) {
+                ctrl_conn = mpd_connection_new(host.c_str(), port, 1000);
+                if (ctrl_conn && mpd_connection_get_error(ctrl_conn) != MPD_ERROR_SUCCESS) {
+                    mpd_connection_free(ctrl_conn); ctrl_conn = nullptr;
+                }
+            }
+            return ctrl_conn != nullptr;
+        }
+
         void withMPD(std::function<void(mpd_connection*)> action) {
-            struct mpd_connection* ctrl = mpd_connection_new(host.c_str(), port, 1000);
-            if (ctrl && mpd_connection_get_error(ctrl) == MPD_ERROR_SUCCESS)
-                action(ctrl);
-            if (ctrl) mpd_connection_free(ctrl);
+            std::lock_guard<std::mutex> lock(ctrl_mutex);
+            if (!ensureCtrl()) return;
+            action(ctrl_conn);
+            if (mpd_connection_get_error(ctrl_conn) != MPD_ERROR_SUCCESS) {
+                // Connection may have hit MPD's server-side idle timeout: retry once fresh
+                mpd_connection_free(ctrl_conn); ctrl_conn = nullptr;
+                if (ensureCtrl()) {
+                    action(ctrl_conn);
+                    if (mpd_connection_get_error(ctrl_conn) != MPD_ERROR_SUCCESS) {
+                        mpd_connection_free(ctrl_conn); ctrl_conn = nullptr;
+                    }
+                }
+            }
         }
 
     public:
         MPDClient(const std::string& mpd_host = "localhost", int mpd_port = 6600)
             : conn(nullptr), thread_running(false), host(mpd_host), port(mpd_port) {
             formatted_text = "Waiting for MPD...";
-            track_number = ""; title = "No song playing"; artist = ""; album = "";
-            date = ""; bitrate_str = ""; format_str = "";
-            elapsed_time = 0; total_time = 0; is_playing = false;
+            title = "No song playing";
+            elapsed_ms = 0; total_time = 0; is_playing = false;
             last_status_update = std::chrono::steady_clock::now();
             last_bitrate_check = std::chrono::steady_clock::now();
         }
@@ -519,50 +526,49 @@ class MPDClient {
         }
 
         void stop() {
-            if (!thread_running) return;
-            thread_running = false;
-            if (mpd_thread.joinable()) mpd_thread.join();
+            if (thread_running) {
+                thread_running = false;
+                if (mpd_thread.joinable()) mpd_thread.join();
+            }
+            std::lock_guard<std::mutex> lock(ctrl_mutex);
+            if (ctrl_conn) { mpd_connection_free(ctrl_conn); ctrl_conn = nullptr; }
+        }
+
+        struct Snapshot {
+            std::string track_number, title, artist, album, date, bitrate_str, format_str;
+            unsigned int elapsed_time, total_time;
+            bool is_playing;
+        };
+
+        Snapshot getSnapshot() {
+            std::lock_guard<std::mutex> lock(data_mutex);
+            unsigned int elapsed = elapsed_ms / 1000;
+            if (is_playing) {
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - last_status_update).count();
+                elapsed = (elapsed_ms + (unsigned)ms) / 1000;
+                if (total_time > 0) elapsed = std::min(elapsed, total_time);
+            }
+            return {track_number, title, artist, album, date, bitrate_str, format_str,
+                    elapsed, total_time, is_playing};
         }
 
         std::string getFormattedText() { std::lock_guard<std::mutex> lock(data_mutex); return formatted_text; }
-        std::string getTrackNumber()   { std::lock_guard<std::mutex> lock(data_mutex); return track_number; }
         std::string getTitle()         { std::lock_guard<std::mutex> lock(data_mutex); return title; }
         std::string getArtist()        { std::lock_guard<std::mutex> lock(data_mutex); return artist; }
-        std::string getAlbum()         { std::lock_guard<std::mutex> lock(data_mutex); return album; }
-        std::string getDate()          { std::lock_guard<std::mutex> lock(data_mutex); return date; }
-        std::string getBitrate()       { std::lock_guard<std::mutex> lock(data_mutex); return bitrate_str; }
-        std::string getFormat()        { std::lock_guard<std::mutex> lock(data_mutex); return format_str; }
-        unsigned int getElapsedTime()  { std::lock_guard<std::mutex> lock(data_mutex); return elapsed_time; }
-        unsigned int getTotalTime()    { std::lock_guard<std::mutex> lock(data_mutex); return total_time; }
-
-        std::string formatTime(unsigned int seconds) {
-            char buffer[16];
-            snprintf(buffer, sizeof(buffer), "%02u:%02u", seconds / 60, seconds % 60);
-            return std::string(buffer);
-        }
 
         void playPause() {
-            withMPD([this](auto* c) {
-                if (is_playing) mpd_run_toggle_pause(c);
+            bool playing;
+            { std::lock_guard<std::mutex> lock(data_mutex); playing = is_playing; }
+            withMPD([playing](auto* c) {
+                if (playing) mpd_run_toggle_pause(c);
                 else mpd_run_play(c);
             });
         }
+        // Unconditional pause: a toggle would start playback if MPD was idle
+        void pause() { withMPD([](auto* c) { mpd_run_pause(c, true); }); }
         void nextTrack() { withMPD([](auto* c) { mpd_run_next(c); }); }
         void prevTrack() { withMPD([](auto* c) { mpd_run_previous(c); }); }
-
-        void updateElapsedTime() {
-            std::lock_guard<std::mutex> lock(data_mutex);
-            if (is_playing && total_time > 0) {
-                auto now = std::chrono::steady_clock::now();
-                auto diff = std::chrono::duration_cast<std::chrono::seconds>(
-                    now - last_status_update).count();
-                if (diff > 0) {
-                    elapsed_time += diff;
-                    if (elapsed_time > total_time) elapsed_time = total_time;
-                    last_status_update = now;
-                }
-            }
-        }
 
         struct TrackInfo {
             std::string title, artist, file, track_num;
@@ -643,25 +649,20 @@ class MPDClient {
             withMPD([&](auto* c) { mpd_run_add(c, file.c_str()); });
         }
 
-        void setVolume(int delta) {
+        // Returns the new volume, or -1 if MPD is unreachable
+        int setVolume(int delta) {
+            int new_vol = -1;
             withMPD([&](auto* c) {
                 struct mpd_status* status = mpd_run_status(c);
                 if (status) {
                     int vol = std::clamp((int)mpd_status_get_volume(status) + delta, 0, 100);
                     mpd_status_free(status);
-                    mpd_run_set_volume(c, vol);
+                    if (mpd_run_set_volume(c, vol)) new_vol = vol;
                 }
             });
+            return new_vol;
         }
 
-        int getVolume() {
-            int vol = -1;
-            withMPD([&](auto* c) {
-                struct mpd_status* status = mpd_run_status(c);
-                if (status) { vol = (int)mpd_status_get_volume(status); mpd_status_free(status); }
-            });
-            return vol;
-        }
 };
 
 // --- Bluetooth Monitor ---
@@ -680,6 +681,97 @@ class BluetoothMonitor {
 
         std::function<void(bool)> on_connection_change;
         std::chrono::steady_clock::time_point last_position_update;
+
+        // Private connection for remote-control calls from the main thread, so
+        // replies never race with monitorLoop() popping the shared connection
+        DBusConnection* ctrl_conn = nullptr;
+        std::mutex ctrl_mutex;
+
+        struct Player { std::string path; bool playing = false; };
+
+        // First org.bluez.MediaPlayer1 and its Status, from one
+        // GetManagedObjects round-trip (a{oa{sa{sv}}}); empty path if none
+        Player findPlayer() {
+            Player found;
+            std::lock_guard<std::mutex> lock(ctrl_mutex);
+            if (!ctrl_conn) {
+                DBusError err; dbus_error_init(&err);
+                ctrl_conn = dbus_bus_get_private(DBUS_BUS_SYSTEM, &err);
+                if (!ctrl_conn) { dbus_error_free(&err); return found; }
+                dbus_connection_set_exit_on_disconnect(ctrl_conn, FALSE);
+            }
+            DBusMessage* call = dbus_message_new_method_call("org.bluez", "/",
+                "org.freedesktop.DBus.ObjectManager", "GetManagedObjects");
+            DBusError err; dbus_error_init(&err);
+            DBusMessage* reply = dbus_connection_send_with_reply_and_block(ctrl_conn, call, 500, &err);
+            dbus_message_unref(call);
+            if (!reply) { dbus_error_free(&err); return found; }
+
+            DBusMessageIter top, objs;
+            if (dbus_message_iter_init(reply, &top) && dbus_message_iter_get_arg_type(&top) == DBUS_TYPE_ARRAY) {
+                dbus_message_iter_recurse(&top, &objs);
+                for (; found.path.empty() && dbus_message_iter_get_arg_type(&objs) == DBUS_TYPE_DICT_ENTRY;
+                       dbus_message_iter_next(&objs)) {
+                    DBusMessageIter obj, ifaces;
+                    const char* path;
+                    dbus_message_iter_recurse(&objs, &obj);
+                    dbus_message_iter_get_basic(&obj, &path);
+                    dbus_message_iter_next(&obj);
+                    dbus_message_iter_recurse(&obj, &ifaces);
+                    for (; dbus_message_iter_get_arg_type(&ifaces) == DBUS_TYPE_DICT_ENTRY;
+                           dbus_message_iter_next(&ifaces)) {
+                        DBusMessageIter iface, props;
+                        const char* name;
+                        dbus_message_iter_recurse(&ifaces, &iface);
+                        dbus_message_iter_get_basic(&iface, &name);
+                        if (strcmp(name, "org.bluez.MediaPlayer1") != 0) continue;
+                        found.path = path;
+                        dbus_message_iter_next(&iface);
+                        dbus_message_iter_recurse(&iface, &props);
+                        for (; dbus_message_iter_get_arg_type(&props) == DBUS_TYPE_DICT_ENTRY;
+                               dbus_message_iter_next(&props)) {
+                            DBusMessageIter prop, value;
+                            const char* key;
+                            dbus_message_iter_recurse(&props, &prop);
+                            dbus_message_iter_get_basic(&prop, &key);
+                            if (strcmp(key, "Status") != 0) continue;
+                            dbus_message_iter_next(&prop);
+                            dbus_message_iter_recurse(&prop, &value);
+                            if (dbus_message_iter_get_arg_type(&value) == DBUS_TYPE_STRING) {
+                                const char* status;
+                                dbus_message_iter_get_basic(&value, &status);
+                                found.playing = strcmp(status, "playing") == 0;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            dbus_message_unref(reply);
+            return found;
+        }
+
+        bool sendPlayerCommand(const std::string& path, const char* method) {
+            std::lock_guard<std::mutex> lock(ctrl_mutex);
+            if (!ctrl_conn) return false;
+            DBusMessage* call = dbus_message_new_method_call("org.bluez", path.c_str(),
+                "org.bluez.MediaPlayer1", method);
+            dbus_message_set_no_reply(call, TRUE);
+            bool ok = dbus_connection_send(ctrl_conn, call, nullptr);
+            dbus_connection_flush(ctrl_conn);
+            dbus_message_unref(call);
+            printf("Bluetooth %s -> %s\n", method, path.c_str());
+            return ok;
+        }
+
+        // Position extrapolated from the last Position/Status update (data_mutex held)
+        uint32_t positionNow() const {
+            if (!bt_playing) return bt_position;
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - last_position_update).count();
+            uint64_t pos = bt_position + (uint64_t)ms;
+            return (uint32_t)(bt_duration > 0 ? std::min<uint64_t>(pos, bt_duration) : pos);
+        }
 
         void monitorLoop() {
             while (running) {
@@ -723,6 +815,10 @@ class BluetoothMonitor {
                 if (strcmp(key, "Status") == 0) {
                     const char* status;
                     dbus_message_iter_get_basic(&variant, &status);
+                    // Freeze the extrapolated position before the state flips,
+                    // otherwise resuming would count the paused time
+                    bt_position = positionNow();
+                    last_position_update = std::chrono::steady_clock::now();
                     bt_playing = (strcmp(status, "playing") == 0);
                 } else if (strcmp(key, "Track") == 0) {
                     parseTrack(&variant);
@@ -820,13 +916,24 @@ class BluetoothMonitor {
             running = false;
             if (monitor_thread.joinable()) monitor_thread.join();
             if (conn) { dbus_connection_unref(conn); conn = nullptr; }
+            std::lock_guard<std::mutex> lock(ctrl_mutex);
+            if (ctrl_conn) { dbus_connection_close(ctrl_conn); dbus_connection_unref(ctrl_conn); ctrl_conn = nullptr; }
         }
 
+        // true while A2DP audio is streaming (transport "active")
         bool isConnected() const { return bt_connected; }
+
+        // AVRCP remote control of the connected phone. Routed on the presence
+        // of its MediaPlayer1 rather than isConnected(): the transport goes
+        // idle as soon as the phone pauses, and play must then resume it.
+        // Each returns false when no phone is connected (caller falls back to MPD)
+        bool playPause() {
+            Player p = findPlayer();
+            return !p.path.empty() && sendPlayerCommand(p.path, p.playing ? "Pause" : "Play");
+        }
+        bool next()     { Player p = findPlayer(); return !p.path.empty() && sendPlayerCommand(p.path, "Next"); }
+        bool previous() { Player p = findPlayer(); return !p.path.empty() && sendPlayerCommand(p.path, "Previous"); }
         bool isPlaying() const { return bt_playing; }
-        std::string getTitle()  { std::lock_guard<std::mutex> lock(data_mutex); return bt_title; }
-        std::string getArtist() { std::lock_guard<std::mutex> lock(data_mutex); return bt_artist; }
-        std::string getAlbum()  { std::lock_guard<std::mutex> lock(data_mutex); return bt_album; }
 
         std::string getFormattedText() {
             std::lock_guard<std::mutex> lock(data_mutex);
@@ -837,22 +944,8 @@ class BluetoothMonitor {
             return text;
         }
 
-        void updateElapsedTime() {
-            std::lock_guard<std::mutex> lock(data_mutex);
-            if (bt_playing && bt_duration > 0) {
-                auto now = std::chrono::steady_clock::now();
-                auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now - last_position_update).count();
-                if (diff > 0) {
-                    bt_position += diff;
-                    if (bt_position > bt_duration) bt_position = bt_duration;
-                    last_position_update = now;
-                }
-            }
-        }
-
-        uint32_t getDuration() const { return bt_duration; }
-        uint32_t getPosition() const { return bt_position; }
+        uint32_t getDuration() { std::lock_guard<std::mutex> lock(data_mutex); return bt_duration; }
+        uint32_t getPosition() { std::lock_guard<std::mutex> lock(data_mutex); return positionNow(); }
 };
 
 // --- Font Manager ---
@@ -862,24 +955,72 @@ class FontManager {
         FT_Face face_regular, face_small, face_large;
         bool initialized;
 
-        // Shared UTF-8 decoder
-        static int decodeUTF8(const unsigned char*& utext, unsigned int& codepoint) {
-            if ((*utext & 0x80) == 0x00) { codepoint = *utext; return 1; }
-            if ((*utext & 0xE0) == 0xC0) {
-                codepoint = (*utext & 0x1F) << 6 | (*(utext+1) & 0x3F); return 2;
+        // Shared UTF-8 decoder. Returns 0 on an invalid sequence; every
+        // continuation byte is checked, so a truncated sequence stops at the
+        // terminating NUL instead of reading past it
+        static int decodeUTF8(const unsigned char* utext, unsigned int& codepoint) {
+            unsigned char c = *utext;
+            int len;
+            if (c < 0x80)                { codepoint = c; return 1; }
+            else if ((c & 0xE0) == 0xC0) { codepoint = c & 0x1F; len = 2; }
+            else if ((c & 0xF0) == 0xE0) { codepoint = c & 0x0F; len = 3; }
+            else if ((c & 0xF8) == 0xF0) { codepoint = c & 0x07; len = 4; }
+            else return 0;
+            for (int i = 1; i < len; i++) {
+                if ((utext[i] & 0xC0) != 0x80) return 0;
+                codepoint = (codepoint << 6) | (utext[i] & 0x3F);
             }
-            if ((*utext & 0xF0) == 0xE0) {
-                codepoint = (*utext & 0x0F) << 12 | (*(utext+1) & 0x3F) << 6 | (*(utext+2) & 0x3F); return 3;
-            }
-            if ((*utext & 0xF8) == 0xF0) {
-                codepoint = (*utext & 0x07) << 18 | (*(utext+1) & 0x3F) << 12
-                          | (*(utext+2) & 0x3F) << 6 | (*(utext+3) & 0x3F); return 4;
-            }
-            return 0; // invalid
+            return len;
         }
 
     public:
         enum FontSize { SMALL, REGULAR, LARGE };
+
+    private:
+        struct Glyph {
+            std::vector<uint8_t> bitmap; // unpacked, 1 byte per pixel (0 or 1)
+            int width = 0, rows = 0;
+            int left = 0, top = 0;
+            int advance = 0;
+            bool valid = false;
+        };
+        std::array<std::unordered_map<unsigned int, Glyph>, 3> glyph_cache; // indexed by FontSize
+
+        FT_Face pickFace(FontSize size) const {
+            if (size == SMALL && face_small) return face_small;
+            if (size == LARGE && face_large) return face_large;
+            return face_regular;
+        }
+
+        const Glyph& getGlyph(unsigned int codepoint, FontSize size) {
+            auto& cache = glyph_cache[size];
+            auto it = cache.find(codepoint);
+            if (it != cache.end()) return it->second;
+
+            Glyph g;
+            FT_Face face = pickFace(size);
+            if (!FT_Load_Char(face, codepoint, FT_LOAD_RENDER | FT_LOAD_TARGET_MONO)) {
+                FT_GlyphSlot slot = face->glyph;
+                FT_Bitmap* bm = &slot->bitmap;
+                g.width = (int)bm->width; g.rows = (int)bm->rows;
+                g.left = slot->bitmap_left; g.top = slot->bitmap_top;
+                g.advance = slot->advance.x >> 6;
+                g.valid = true;
+                g.bitmap.resize((size_t)g.width * g.rows);
+                for (int row = 0; row < g.rows; row++) {
+                    const uint8_t* src = bm->buffer + row * bm->pitch;
+                    for (int col = 0; col < g.width; col++) {
+                        if (bm->pixel_mode == FT_PIXEL_MODE_MONO)
+                            g.bitmap[row * g.width + col] = (src[col >> 3] >> (7 - (col & 7))) & 1;
+                        else
+                            g.bitmap[row * g.width + col] = src[col] >= 128;
+                    }
+                }
+            }
+            return cache.emplace(codepoint, std::move(g)).first->second;
+        }
+
+    public:
 
         FontManager() : library(nullptr), face_regular(nullptr), face_small(nullptr),
                     face_large(nullptr), initialized(false) {}
@@ -909,10 +1050,6 @@ class FontManager {
                     int x, int y, FontSize size = REGULAR, bool invert = false) {
             if (!initialized || !text) return false;
 
-            FT_Face face = face_regular;
-            if (size == SMALL && face_small) face = face_small;
-            if (size == LARGE && face_large) face = face_large;
-
             int cursor_x = x;
             const unsigned char* utext = (const unsigned char*)text;
 
@@ -921,29 +1058,26 @@ class FontManager {
                 int bytes = decodeUTF8(utext, codepoint);
                 if (bytes == 0) { utext++; continue; }
 
-                if (FT_Load_Char(face, codepoint, FT_LOAD_RENDER)) { utext += bytes; continue; }
+                const Glyph& g = getGlyph(codepoint, size);
+                if (!g.valid) { utext += bytes; continue; }
 
-                FT_GlyphSlot slot = face->glyph;
-                FT_Bitmap* bitmap = &slot->bitmap;
-                int start_x = cursor_x + slot->bitmap_left;
-                int start_y = y - slot->bitmap_top;
+                int start_x = cursor_x + g.left;
+                int start_y = y - g.top;
 
-                for (unsigned int row = 0; row < bitmap->rows; row++) {
-                    for (unsigned int col = 0; col < bitmap->width; col++) {
+                for (int row = 0; row < g.rows; row++) {
+                    int py = start_y + row;
+                    if (py < 0 || py >= buf_height) continue;
+                    int page_offset = (py / 8) * buf_width;
+                    uint8_t bit = 1 << (py % 8);
+                    const uint8_t* src = &g.bitmap[(size_t)row * g.width];
+                    for (int col = 0; col < g.width; col++) {
                         int px = start_x + col;
-                        int py = start_y + row;
-                        if (px >= 0 && px < buf_width && py >= 0 && py < buf_height) {
-                            uint8_t gray = bitmap->buffer[row * bitmap->pitch + col];
-                            if (gray > Config::SCREEN_WIDTH) {
-                                int page = py / 8;
-                                int bit = py % 8;
-                                if (invert) buffer[page * buf_width + px] &= ~(1 << bit);
-                                else        buffer[page * buf_width + px] |= (1 << bit);
-                            }
-                        }
+                        if (px < 0 || px >= buf_width || !src[col]) continue;
+                        if (invert) buffer[page_offset + px] &= ~bit;
+                        else        buffer[page_offset + px] |= bit;
                     }
                 }
-                cursor_x += slot->advance.x >> 6;
+                cursor_x += g.advance;
                 utext += bytes;
             }
             return true;
@@ -951,20 +1085,40 @@ class FontManager {
 
         int getTextWidth(const char* text, FontSize size = REGULAR) {
             if (!initialized || !text) return 0;
-            FT_Face face = face_regular;
-            if (size == SMALL && face_small) face = face_small;
-
             int width = 0;
             const unsigned char* utext = (const unsigned char*)text;
             while (*utext) {
                 unsigned int codepoint;
                 int bytes = decodeUTF8(utext, codepoint);
                 if (bytes == 0) { utext++; continue; }
-                if (!FT_Load_Char(face, codepoint, FT_LOAD_DEFAULT))
-                    width += face->glyph->advance.x >> 6;
+                const Glyph& g = getGlyph(codepoint, size);
+                if (g.valid) width += g.advance;
                 utext += bytes;
             }
             return width;
+        }
+
+        // Longest UTF-8-safe prefix that fits max_px (with ".." appended if truncated)
+        std::string truncateToWidth(const std::string& s, int max_px, FontSize size = REGULAR) {
+            if (!initialized) return s;
+            if (getTextWidth(s.c_str(), size) <= max_px) return s;
+
+            int ellipsis_w = getTextWidth("..", size);
+            int width = 0;
+            size_t fit_bytes = 0;
+            const unsigned char* utext = (const unsigned char*)s.c_str();
+            while (*utext) {
+                unsigned int codepoint;
+                int bytes = decodeUTF8(utext, codepoint);
+                if (bytes == 0) { utext++; fit_bytes++; continue; }
+                const Glyph& g = getGlyph(codepoint, size);
+                int adv = g.valid ? g.advance : 0;
+                if (width + adv + ellipsis_w > max_px) break;
+                width += adv;
+                fit_bytes += bytes;
+                utext += bytes;
+            }
+            return s.substr(0, fit_bytes) + "..";
         }
 
         bool isInitialized() const { return initialized; }
@@ -975,7 +1129,6 @@ class Display {
     private:
         uint8_t _cs, _dc, _rst;
         FontManager* font_manager;
-        bool is_sleeping = false;
 
     public:
     uint8_t buffer[Config::SPI_CHUNK_SIZE];
@@ -987,7 +1140,7 @@ class Display {
     bool begin() {
         // On bcm2835, CS is manual GPIO — must claim as output
         // On lgpio, CS is managed by SPI hardware — do NOT claim
-        if (!hw->supportsAlerts()) {
+        if (!hw->hardwareChipSelect()) {
             hw->claimOutput(_cs, 1);
         }
         hw->claimOutput(_dc, 0);
@@ -1004,28 +1157,31 @@ class Display {
             0xD3, 0x00, 0xD5, 0x70, 0xD9, 0x22, 0xDA, 0x12,
             0xDB, 0x34, 0x8D, 0x14, 0xAF
         };
-        for (uint8_t cmd : init_cmds) sendCommand(cmd);
+        sendCommands(init_cmds, sizeof(init_cmds));
         return true;
     }
 
-    void sendCommand(uint8_t cmd) {
+    void sendCommand(uint8_t cmd) { sendCommands(&cmd, 1); }
+
+    void sendCommands(const uint8_t* cmds, int len) {
         hw->digitalWrite(_dc, 0);
-        hw->spiTransfer(_cs, cmd);
+        hw->spiWrite(_cs, (const char*)cmds, len);
     }
 
     void display() {
-        sendCommand(0xB0); sendCommand(0x00); sendCommand(0x10);
+        static constexpr uint8_t addr_cmds[] = {0xB0, 0x00, 0x10};
+        sendCommands(addr_cmds, sizeof(addr_cmds));
         hw->digitalWrite(_dc, 1);
         hw->spiWrite(_cs, (char*)buffer, sizeof(buffer));
     }
 
     void clear() { memset(buffer, 0x00, sizeof(buffer)); }
-    void sleep() { sendCommand(0xAE); is_sleeping = true; }
+    void sleep() { sendCommand(0xAE); }
     void shutdown() { sendCommand(0xAE); clear(); display(); }
-    void wake() { sendCommand(0xAF); is_sleeping = false; }
+    void wake() { sendCommand(0xAF); }
 
     void drawPixel(int x, int y) {
-        if (x < 0 || x >= Config::SCREEN_WIDTH || y < 0 || y >= 64) return;
+        if (x < 0 || x >= Config::SCREEN_WIDTH || y < 0 || y >= Config::SCREEN_HEIGHT) return;
         buffer[(y / 8) * Config::SCREEN_WIDTH + x] |= (1 << (y % 8));
     }
 
@@ -1042,43 +1198,33 @@ class Display {
         }
     }
 
+    // Set (on) or clear (!on) every pixel of the clipped rectangle
+    void fillRect(int x, int y, int w, int h, bool on = true) {
+        int x_start = std::max(0, x), y_start = std::max(0, y);
+        int x_end = std::min(Config::SCREEN_WIDTH, x + w);
+        int y_end = std::min(Config::SCREEN_HEIGHT, y + h);
+        for (int py = y_start; py < y_end; py++) {
+            uint8_t* row = &buffer[(py / 8) * Config::SCREEN_WIDTH];
+            uint8_t bit_mask = (1 << (py % 8));
+            for (int px = x_start; px < x_end; px++) {
+                if (on) row[px] |= bit_mask;
+                else    row[px] &= ~bit_mask;
+            }
+        }
+    }
+
     void drawRect(int x, int y, int w, int h, bool filled = false) {
         if (filled) {
-            int x_start = std::max(0, x), y_start = std::max(0, y);
-            int x_end = std::min(Config::SCREEN_WIDTH, x + w);
-            int y_end = std::min(Config::SCREEN_HEIGHT, y + h);
-            for (int py = y_start; py < y_end; py++) {
-                int row_offset = (py / 8) * Config::SCREEN_WIDTH;
-                uint8_t bit_mask = (1 << (py % 8));
-                for (int px = x_start; px < x_end; px++)
-                    buffer[row_offset + px] |= bit_mask;
-            }
+            fillRect(x, y, w, h);
         } else {
             drawLine(x, y, x+w-1, y); drawLine(x+w-1, y, x+w-1, y+h-1);
             drawLine(x+w-1, y+h-1, x, y+h-1); drawLine(x, y+h-1, x, y);
         }
     }
 
-    void drawCircle(int x0, int y0, int radius, bool filled = false) {
-        int x = radius, y = 0, err = 0;
-        while (x >= y) {
-            if (filled) {
-                drawLine(x0-x, y0+y, x0+x, y0+y); drawLine(x0-x, y0-y, x0+x, y0-y);
-                drawLine(x0-y, y0+x, x0+y, y0+x); drawLine(x0-y, y0-x, x0+y, y0-x);
-            } else {
-                drawPixel(x0+x, y0+y); drawPixel(x0+y, y0+x);
-                drawPixel(x0-y, y0+x); drawPixel(x0-x, y0+y);
-                drawPixel(x0-x, y0-y); drawPixel(x0-y, y0-x);
-                drawPixel(x0+y, y0-x); drawPixel(x0+x, y0-y);
-            }
-            if (err <= 0) { y += 1; err += 2*y + 1; }
-            if (err > 0) { x -= 1; err -= 2*x + 1; }
-        }
-    }
-
     void setFont(FontManager* fm) { font_manager = fm; }
 
-    void drawText(uint8_t x, uint8_t y, const char* text, FontManager::FontSize size = FontManager::REGULAR) {
+    void drawText(int x, int y, const char* text, FontManager::FontSize size = FontManager::REGULAR) {
         if (font_manager) font_manager->renderText(text, buffer, Config::SCREEN_WIDTH, Config::SCREEN_HEIGHT, x, y, size);
     }
 };
@@ -1093,14 +1239,25 @@ struct ControlState {
 // Audio Processor with sleep detection
 class AudioProcessor {
     private:
-        static constexpr int SAMPLE_RATE = 44100;
+        static constexpr int PREFERRED_RATE = 44100;
+        // Actual capture rate, set in start(); the loopback may force e.g. 48000
+        int sample_rate = PREFERRED_RATE;
         static constexpr int CHANNELS = 2;
+        // NOTE: small capture periods pin the snd-aloop cable and force small
+        // periods on MPD's side, which makes its output thread busy-spin on
+        // this multi+timer_source setup (tested: 480/960 frames -> 72-85% CPU).
+        // Keep 2048 and let the virtual read head smooth over lumpy delivery.
         static constexpr int FRAMES_PER_BUFFER = 2048;
-        static constexpr int FFT_SIZE_BASS = 8192;
+        // 4096 keeps one distinct bin per low band at 44.1kHz while halving
+        // the window's latency (its centre sits ~46ms behind the head)
+        static constexpr int FFT_SIZE_BASS = 4096;
         static constexpr int FFT_SIZE_MID = 2048;
         static constexpr int FFT_SIZE_TREBLE = 512;
         static constexpr float SILENCE_THRESHOLD = 0.001f;
         static constexpr int SLEEP_TIMEOUT_SEC = 10;
+        // Power of two, large enough for the analysis window plus the head's
+        // lag behind the newest sample (latency + one capture period)
+        static constexpr size_t BUF_SZ = 16384;
 
         float* temp_left;
         float* temp_right;
@@ -1132,7 +1289,11 @@ class AudioProcessor {
             {15962,15981,49.3f},{15981,15990,49.6f},{15990,15995,49.8f},{15995,16000,50.0f}
         };
 
+        // Capture source: the PipeWire sink monitor (what the HifiBerry plays,
+        // Bluetooth included), or the snd-aloop capture side as a fallback
         snd_pcm_t* pcm_handle;
+        pw_thread_loop* pw_loop = nullptr;
+        pw_stream* pw_capture = nullptr;
         std::thread audio_thread;
         std::atomic<bool> thread_running;
         std::atomic<bool> is_sleeping{false};
@@ -1142,10 +1303,25 @@ class AudioProcessor {
         std::atomic<size_t> write_pos{0};
         std::mutex buffer_mutex;
 
+        // Virtual read head: audio arrives one capture period at a time, so
+        // readers follow a rate-locked position slightly behind the newest
+        // sample instead of seeing the buffer freeze and jump once per period.
+        // The head dips to ~latency - delivery/2 just before each delivery, so
+        // the latency is half the largest delivery seen plus a jitter margin
+        uint64_t total_written = 0;                 // frames; guarded by buffer_mutex
+        double head_pos = 0;                        // frames; main thread only
+        std::chrono::steady_clock::time_point last_head_update;
+        static constexpr double HEAD_JITTER_MARGIN_SEC = 0.015;
+        int delivery_frames = 0;                    // guarded by buffer_mutex
+        double head_latency_frames = 0.15 * PREFERRED_RATE; // guarded by buffer_mutex
+
         fftwf_plan plan_bass, plan_mid, plan_treble;
         float *fft_in_bass, *fft_in_mid, *fft_in_treble;
         fftwf_complex *fft_out_bass, *fft_out_mid, *fft_out_treble;
         float *window_bass, *window_mid, *window_treble;
+
+        // Per-frame cached power spectra, [0]=left [1]=right (filled by update())
+        float *power_bass[2], *power_mid[2], *power_treble[2];
 
         std::array<float, 7> prev_left_spectrum{}, prev_right_spectrum{};
         std::array<float, 64> prev_left_spectrum_large{}, prev_right_spectrum_large{};
@@ -1153,8 +1329,10 @@ class AudioProcessor {
         float noise_reduction = 77.0f, sensitivity = 100.0f;
         float integral_factor, gravity_factor, scale_factor;
 
-        std::chrono::steady_clock::time_point last_audio_time;
+        // Written by the audio thread, read/reset by the main thread
+        std::atomic<std::chrono::steady_clock::time_point> last_audio_time;
         std::atomic<float> max_amplitude{0.0f};
+        bool spectra_valid = false;                 // main thread only
 
         void createHannWindow(float* window, int size) {
             for (int i = 0; i < size; i++)
@@ -1183,22 +1361,105 @@ class AudioProcessor {
                     continue;
                 }
 
+                pushFrames(audio_buffer, frames, 1.0f / 32768.0f);
+            }
+            delete[] audio_buffer;
+        }
+
+        // Append interleaved stereo frames from either capture backend
+        template<typename T>
+        void pushFrames(const T* buf, int frames, float scale) {
+            float frame_max = 0.0f;
+            {
                 std::lock_guard<std::mutex> lock(buffer_mutex);
                 size_t pos = write_pos;
                 for (int i = 0; i < frames; i++) {
-                    circular_buffer_left[pos] = audio_buffer[i * CHANNELS] / 32768.0f;
-                    circular_buffer_right[pos] = (CHANNELS > 1) ?
-                        audio_buffer[i * CHANNELS + 1] / 32768.0f : circular_buffer_left[pos];
-                    frame_max = std::max(frame_max, std::max(
-                        std::abs(circular_buffer_left[pos]), std::abs(circular_buffer_right[pos])));
-                    pos = (pos + 1) % (FFT_SIZE_BASS * 2);
+                    float l = buf[i * CHANNELS] * scale, r = buf[i * CHANNELS + 1] * scale;
+                    circular_buffer_left[pos] = l;
+                    circular_buffer_right[pos] = r;
+                    frame_max = std::max(frame_max, std::max(std::abs(l), std::abs(r)));
+                    pos = (pos + 1) & (BUF_SZ - 1);
                 }
                 write_pos = pos;
-                max_amplitude = frame_max;
-                if (frame_max > SILENCE_THRESHOLD)
-                    last_audio_time = std::chrono::steady_clock::now();
+                total_written += frames;
+                if (frames > delivery_frames) {
+                    delivery_frames = frames;
+                    head_latency_frames = frames / 2.0 + HEAD_JITTER_MARGIN_SEC * sample_rate;
+                    printf("Audio delivery: %d frames, head latency %.0f ms\n",
+                           frames, 1000.0 * head_latency_frames / sample_rate);
+                }
             }
-            delete[] audio_buffer;
+            max_amplitude = frame_max;
+            if (frame_max > SILENCE_THRESHOLD)
+                last_audio_time = std::chrono::steady_clock::now();
+        }
+
+        static void onPipeWireProcess(void* data) {
+            auto* self = static_cast<AudioProcessor*>(data);
+            pw_buffer* b = pw_stream_dequeue_buffer(self->pw_capture);
+            if (!b) return;
+            const spa_data& d = b->buffer->datas[0];
+            if (d.data && d.chunk) {
+                int frames = (int)(d.chunk->size / (sizeof(float) * CHANNELS));
+                self->pushFrames(SPA_PTROFF(d.data, d.chunk->offset, const float), frames, 1.0f);
+            }
+            pw_stream_queue_buffer(self->pw_capture, b);
+        }
+
+        static void onPipeWireState(void*, pw_stream_state, pw_stream_state state, const char* error) {
+            printf("PipeWire capture: %s%s%s\n", pw_stream_state_as_string(state),
+                   error ? " - " : "", error ? error : "");
+        }
+
+        // Passive capture of the default sink's monitor: passive so it never
+        // keeps the HifiBerry running (and the amp awake) when nothing plays
+        bool startPipeWire() {
+            static const pw_stream_events events = [] {
+                pw_stream_events e{};
+                e.version = PW_VERSION_STREAM_EVENTS;
+                e.state_changed = onPipeWireState;
+                e.process = onPipeWireProcess;
+                return e;
+            }();
+            pw_init(nullptr, nullptr);
+            pw_loop = pw_thread_loop_new("rav-capture", nullptr);
+            if (!pw_loop) return false;
+            pw_properties* props = pw_properties_new(
+                PW_KEY_MEDIA_TYPE, "Audio", PW_KEY_MEDIA_CATEGORY, "Capture",
+                PW_KEY_MEDIA_ROLE, "Music", PW_KEY_STREAM_CAPTURE_SINK, "true",
+                PW_KEY_NODE_PASSIVE, "true", PW_KEY_NODE_NAME, "rav-visualizer", nullptr);
+
+            pw_thread_loop_lock(pw_loop);
+            // NULL when the daemon is unreachable
+            pw_capture = pw_stream_new_simple(pw_thread_loop_get_loop(pw_loop),
+                                              "rav visualizer", props, &events, this);
+            int err = -1;
+            if (pw_capture) {
+                uint8_t pod_buf[1024];
+                spa_pod_builder builder = SPA_POD_BUILDER_INIT(pod_buf, sizeof(pod_buf));
+                spa_audio_info_raw info{};
+                info.format = SPA_AUDIO_FORMAT_F32;
+                info.rate = PREFERRED_RATE;
+                info.channels = CHANNELS;
+                info.position[0] = SPA_AUDIO_CHANNEL_FL;
+                info.position[1] = SPA_AUDIO_CHANNEL_FR;
+                const spa_pod* params[] = { spa_format_audio_raw_build(&builder, SPA_PARAM_EnumFormat, &info) };
+                err = pw_stream_connect(pw_capture, PW_DIRECTION_INPUT, PW_ID_ANY,
+                    (pw_stream_flags)(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS), params, 1);
+            }
+            pw_thread_loop_unlock(pw_loop);
+            if (err < 0 || pw_thread_loop_start(pw_loop) < 0) { stopPipeWire(); return false; }
+            sample_rate = PREFERRED_RATE; // PipeWire converts to the requested format
+            printf("Audio capture: PipeWire sink monitor, %d Hz\n", sample_rate);
+            return true;
+        }
+
+        void stopPipeWire() {
+            if (!pw_loop) return;
+            pw_thread_loop_stop(pw_loop);
+            if (pw_capture) { pw_stream_destroy(pw_capture); pw_capture = nullptr; }
+            pw_thread_loop_destroy(pw_loop); pw_loop = nullptr;
+            pw_deinit();
         }
 
         void updateParameters() {
@@ -1208,52 +1469,72 @@ class AudioProcessor {
             scale_factor = (sensitivity / 100.0f) * 1.8f;
         }
 
-        void fillTempBuffers() {
-            std::lock_guard<std::mutex> lock(buffer_mutex);
-            size_t read_pos = (write_pos + FFT_SIZE_BASS * 2 - FFT_SIZE_BASS) % (FFT_SIZE_BASS * 2);
-            for (int i = 0; i < FFT_SIZE_BASS; i++) {
-                temp_left[i] = circular_buffer_left[read_pos];
-                temp_right[i] = circular_buffer_right[read_pos];
-                read_pos = (read_pos + 1) % (FFT_SIZE_BASS * 2);
-            }
+        // Called once per frame with buffer_mutex held: advance the head at the
+        // sample rate, gently pulled toward (newest - latency) so clock drift
+        // between steady_clock and the audio clock never accumulates
+        void advanceHead() {
+            auto now = std::chrono::steady_clock::now();
+            double dt = std::chrono::duration<double>(now - last_head_update).count();
+            last_head_update = now;
+            head_pos += std::min(dt, 0.5) * sample_rate;
+            double target = (double)total_written - head_latency_frames;
+            head_pos += (target - head_pos) * 0.02;
+            double min_head = std::max(0.0, (double)total_written - (double)(BUF_SZ - FFT_SIZE_BASS));
+            head_pos = std::clamp(head_pos, min_head, (double)total_written);
         }
 
-        void computeChannel(const float* samples, float* bands,
+        // Copy `count` samples ending at the virtual head (buffer_mutex held)
+        void copyWindow(float* dst, const float* src, size_t count) {
+            size_t end = (size_t)head_pos & (BUF_SZ - 1);
+            size_t start = (end + BUF_SZ - count) & (BUF_SZ - 1);
+            size_t first = std::min(count, BUF_SZ - start);
+            memcpy(dst, src + start, first * sizeof(float));
+            if (first < count)
+                memcpy(dst + first, src, (count - first) * sizeof(float));
+        }
+
+        // Windowed FFT of the newest `n` samples: each resolution reacts as
+        // early as its window allows (centres ~46/23/6ms behind the head)
+        static void powerSpectrum(const float* samples, int n, const float* window,
+                                  float* in, fftwf_complex* out, fftwf_plan plan, float* power) {
+            const float* src = samples + (FFT_SIZE_BASS - n);
+            for (int i = 0; i < n; i++) in[i] = src[i] * window[i];
+            fftwf_execute(plan);
+            for (int j = 0; j < n/2; j++) power[j] = out[j][0]*out[j][0] + out[j][1]*out[j][1];
+        }
+
+        void computePowerSpectra(const float* samples, int ch) {
+            powerSpectrum(samples, FFT_SIZE_BASS, window_bass, fft_in_bass, fft_out_bass, plan_bass, power_bass[ch]);
+            powerSpectrum(samples, FFT_SIZE_MID, window_mid, fft_in_mid, fft_out_mid, plan_mid, power_mid[ch]);
+            powerSpectrum(samples, FFT_SIZE_TREBLE, window_treble, fft_in_treble, fft_out_treble, plan_treble, power_treble[ch]);
+        }
+
+        // FFTs are only run when a visualization actually asks for spectra
+        void ensureSpectra() {
+            if (spectra_valid) return;
+            computePowerSpectra(temp_left, 0);
+            computePowerSpectra(temp_right, 1);
+            spectra_valid = true;
+        }
+
+        void aggregateBands(int ch, float* bands,
                             const FreqBand* freq_table, int num_bands,
                             int bass_end, int mid_end) {
-            // BASS FFT
-            for (int i = 0; i < FFT_SIZE_BASS; i++) fft_in_bass[i] = samples[i] * window_bass[i];
-            fftwf_execute(plan_bass);
-            for (int i = 0; i < bass_end; i++) {
-                int lo = freq_table[i].low * FFT_SIZE_BASS / SAMPLE_RATE;
-                int hi = freq_table[i].high * FFT_SIZE_BASS / SAMPLE_RATE;
+            // The correction tables were tuned with an 8192-point bass FFT. A
+            // shorter window shrinks steady tones (x N) less than transients,
+            // so sqrt of the ratio keeps both close to their old heights
+            static const float BASS_GAIN = std::sqrt(8192.0f / FFT_SIZE_BASS);
+            ensureSpectra();
+            for (int i = 0; i < num_bands; i++) {
+                const float* power; int n; float gain = 1.0f;
+                if (i < bass_end)     { power = power_bass[ch];   n = FFT_SIZE_BASS; gain = BASS_GAIN; }
+                else if (i < mid_end) { power = power_mid[ch];    n = FFT_SIZE_MID; }
+                else                  { power = power_treble[ch]; n = FFT_SIZE_TREBLE; }
+                int lo = freq_table[i].low * n / sample_rate;
+                int hi = std::max(lo + 1, freq_table[i].high * n / sample_rate);
                 float sum = 0.0f;
-                for (int j = lo; j < hi && j < FFT_SIZE_BASS/2; j++)
-                    sum += fft_out_bass[j][0]*fft_out_bass[j][0] + fft_out_bass[j][1]*fft_out_bass[j][1];
-                bands[i] = sqrtf(sum / (hi - lo)) * scale_factor * freq_table[i].correction;
-            }
-            // MID FFT
-            for (int i = 0; i < FFT_SIZE_MID; i++) fft_in_mid[i] = samples[i] * window_mid[i];
-            fftwf_execute(plan_mid);
-            for (int i = bass_end; i < mid_end; i++) {
-                int lo = freq_table[i].low * FFT_SIZE_MID / SAMPLE_RATE;
-                int hi = freq_table[i].high * FFT_SIZE_MID / SAMPLE_RATE;
-                float sum = 0.0f;
-                for (int j = lo; j < hi && j < FFT_SIZE_MID/2; j++)
-                    sum += fft_out_mid[j][0]*fft_out_mid[j][0] + fft_out_mid[j][1]*fft_out_mid[j][1];
-                bands[i] = sqrtf(sum / (hi - lo)) * scale_factor * freq_table[i].correction;
-            }
-            // TREBLE FFT
-            for (int i = 0; i < FFT_SIZE_TREBLE; i++) fft_in_treble[i] = samples[i] * window_treble[i];
-            fftwf_execute(plan_treble);
-            for (int i = mid_end; i < num_bands; i++) {
-                int lo = freq_table[i].low * FFT_SIZE_TREBLE / SAMPLE_RATE;
-                int hi = freq_table[i].high * FFT_SIZE_TREBLE / SAMPLE_RATE;
-                if (hi <= lo) hi = lo + 1;
-                float sum = 0.0f;
-                for (int j = lo; j < hi && j < FFT_SIZE_TREBLE/2; j++)
-                    sum += fft_out_treble[j][0]*fft_out_treble[j][0] + fft_out_treble[j][1]*fft_out_treble[j][1];
-                bands[i] = sqrtf(sum / (hi - lo)) * scale_factor * freq_table[i].correction;
+                for (int j = lo; j < hi && j < n/2; j++) sum += power[j];
+                bands[i] = gain * sqrtf(sum / (hi - lo)) * scale_factor * freq_table[i].correction;
             }
         }
 
@@ -1274,23 +1555,41 @@ class AudioProcessor {
 
     public:
         AudioProcessor() : pcm_handle(nullptr), thread_running(false) {
-            int buf_sz = FFT_SIZE_BASS * 2;
-            circular_buffer_left = new float[buf_sz]();
-            circular_buffer_right = new float[buf_sz]();
+            circular_buffer_left = new float[BUF_SZ]();
+            circular_buffer_right = new float[BUF_SZ]();
             temp_left = new float[FFT_SIZE_BASS];
             temp_right = new float[FFT_SIZE_BASS];
 
+            // FFTW_MEASURE planning takes minutes on a Pi 3B if unbounded; cap it
+            // and cache the result in a wisdom file so later startups are instant
+            // STATE_DIRECTORY is set by systemd's StateDirectory=; $HOME is
+            // read-only under ProtectHome, which made every start re-plan
+            const char* state = getenv("STATE_DIRECTORY");
+            const char* home = getenv("HOME");
+            std::string wisdom_path = state ? std::string(state) + "/fftw_wisdom"
+                                    : std::string(home ? home : "/tmp") + "/.rav_fftw_wisdom";
+            fftwf_import_wisdom_from_filename(wisdom_path.c_str());
+            fftwf_set_timelimit(2.0);
+
             fft_in_bass = (float*)fftwf_malloc(sizeof(float) * FFT_SIZE_BASS);
             fft_out_bass = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * (FFT_SIZE_BASS/2 + 1));
-            plan_bass = fftwf_plan_dft_r2c_1d(FFT_SIZE_BASS, fft_in_bass, fft_out_bass, FFTW_ESTIMATE);
+            plan_bass = fftwf_plan_dft_r2c_1d(FFT_SIZE_BASS, fft_in_bass, fft_out_bass, FFTW_MEASURE);
 
             fft_in_mid = (float*)fftwf_malloc(sizeof(float) * FFT_SIZE_MID);
             fft_out_mid = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * (FFT_SIZE_MID/2 + 1));
-            plan_mid = fftwf_plan_dft_r2c_1d(FFT_SIZE_MID, fft_in_mid, fft_out_mid, FFTW_ESTIMATE);
+            plan_mid = fftwf_plan_dft_r2c_1d(FFT_SIZE_MID, fft_in_mid, fft_out_mid, FFTW_MEASURE);
 
             fft_in_treble = (float*)fftwf_malloc(sizeof(float) * FFT_SIZE_TREBLE);
             fft_out_treble = (fftwf_complex*)fftwf_malloc(sizeof(fftwf_complex) * (FFT_SIZE_TREBLE/2 + 1));
-            plan_treble = fftwf_plan_dft_r2c_1d(FFT_SIZE_TREBLE, fft_in_treble, fft_out_treble, FFTW_ESTIMATE);
+            plan_treble = fftwf_plan_dft_r2c_1d(FFT_SIZE_TREBLE, fft_in_treble, fft_out_treble, FFTW_MEASURE);
+
+            fftwf_export_wisdom_to_filename(wisdom_path.c_str());
+
+            for (int ch = 0; ch < 2; ch++) {
+                power_bass[ch] = new float[FFT_SIZE_BASS/2]();
+                power_mid[ch] = new float[FFT_SIZE_MID/2]();
+                power_treble[ch] = new float[FFT_SIZE_TREBLE/2]();
+            }
 
             window_bass = new float[FFT_SIZE_BASS];
             window_mid = new float[FFT_SIZE_MID];
@@ -1300,7 +1599,8 @@ class AudioProcessor {
             createHannWindow(window_treble, FFT_SIZE_TREBLE);
 
             updateParameters();
-            last_audio_time = std::chrono::steady_clock::now();
+            last_head_update = std::chrono::steady_clock::now();
+            last_audio_time = last_head_update;
         }
 
         ~AudioProcessor() {
@@ -1308,6 +1608,9 @@ class AudioProcessor {
             delete[] circular_buffer_left; delete[] circular_buffer_right;
             delete[] temp_left; delete[] temp_right;
             delete[] window_bass; delete[] window_mid; delete[] window_treble;
+            for (int ch = 0; ch < 2; ch++) {
+                delete[] power_bass[ch]; delete[] power_mid[ch]; delete[] power_treble[ch];
+            }
             fftwf_destroy_plan(plan_bass); fftwf_destroy_plan(plan_mid); fftwf_destroy_plan(plan_treble);
             fftwf_free(fft_in_bass); fftwf_free(fft_out_bass);
             fftwf_free(fft_in_mid); fftwf_free(fft_out_mid);
@@ -1315,9 +1618,15 @@ class AudioProcessor {
         }
 
         bool start() {
+            if (startPipeWire()) return true;
+            printf("PipeWire unavailable, falling back to ALSA capture\n");
+            return startAlsa();
+        }
+
+        bool startAlsa() {
             int err = snd_pcm_open(&pcm_handle, "rav", SND_PCM_STREAM_CAPTURE, 0);
             if (err < 0) err = snd_pcm_open(&pcm_handle, "hw:Loopback,1", SND_PCM_STREAM_CAPTURE, 0);
-            if (err < 0) return false;
+            if (err < 0) { pcm_handle = nullptr; return false; }
 
             snd_pcm_hw_params_t* hw_params;
             snd_pcm_hw_params_alloca(&hw_params);
@@ -1325,14 +1634,25 @@ class AudioProcessor {
             snd_pcm_hw_params_set_access(pcm_handle, hw_params, SND_PCM_ACCESS_RW_INTERLEAVED);
             snd_pcm_hw_params_set_format(pcm_handle, hw_params, SND_PCM_FORMAT_S16_LE);
             snd_pcm_hw_params_set_channels(pcm_handle, hw_params, CHANNELS);
-            snd_pcm_hw_params_set_buffer_size(pcm_handle, hw_params, 8192);
-            snd_pcm_hw_params_set_period_size(pcm_handle, hw_params, 2048, 0);
-            unsigned int rate = SAMPLE_RATE;
+            // _near negotiation: with snd-aloop slaved to the sound card timer,
+            // exact period/buffer requests can be unsatisfiable and must adapt.
+            // Buffer is sized from the granted period — asking for a fixed 8192
+            // once got rounded down to one period (instant overrun on every
+            // delivery, stream never advances)
+            snd_pcm_uframes_t period = FRAMES_PER_BUFFER;
+            snd_pcm_hw_params_set_period_size_near(pcm_handle, hw_params, &period, 0);
+            snd_pcm_uframes_t bufsize = period * 4;
+            snd_pcm_hw_params_set_buffer_size_near(pcm_handle, hw_params, &bufsize);
+            unsigned int rate = PREFERRED_RATE;
             snd_pcm_hw_params_set_rate_near(pcm_handle, hw_params, &rate, 0);
 
             if (snd_pcm_hw_params(pcm_handle, hw_params) < 0) {
-                snd_pcm_close(pcm_handle); return false;
+                // Null the handle too: stop() would otherwise close it again
+                snd_pcm_close(pcm_handle); pcm_handle = nullptr; return false;
             }
+            sample_rate = (int)rate;
+            printf("Audio capture: ALSA %d Hz, period %lu, buffer %lu\n",
+                   sample_rate, (unsigned long)period, (unsigned long)bufsize);
             thread_running = true;
             audio_thread = std::thread(&AudioProcessor::audioThreadFunc, this);
             return true;
@@ -1342,6 +1662,7 @@ class AudioProcessor {
         void resetSleepTimer() { last_audio_time = std::chrono::steady_clock::now(); }
 
         void stop() {
+            stopPipeWire();
             if (thread_running) {
                 thread_running = false;
                 if (pcm_handle) snd_pcm_drop(pcm_handle);
@@ -1351,25 +1672,32 @@ class AudioProcessor {
         }
 
         bool checkForAudio() {
-            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::steady_clock::now() - last_audio_time).count();
-            return elapsed < SLEEP_TIMEOUT_SEC;
+            return std::chrono::steady_clock::now() - last_audio_time.load()
+                 < std::chrono::seconds(SLEEP_TIMEOUT_SEC);
+        }
+
+        // Snapshot this frame's window; the FFTs run lazily on the first
+        // get*SpectrumData() call and are shared by the calls that follow
+        void update() {
+            std::lock_guard<std::mutex> lock(buffer_mutex);
+            advanceHead();
+            copyWindow(temp_left, circular_buffer_left, FFT_SIZE_BASS);
+            copyWindow(temp_right, circular_buffer_right, FFT_SIZE_BASS);
+            spectra_valid = false;
         }
 
         void getSpectrumData(std::array<int, 7>& left_out, std::array<int, 7>& right_out) {
             std::array<float, 7> lb{}, rb{};
-            fillTempBuffers();
-            computeChannel(temp_left, lb.data(), FREQ_BANDS, 7, 3, 5);
-            computeChannel(temp_right, rb.data(), FREQ_BANDS, 7, 3, 5);
+            aggregateBands(0, lb.data(), FREQ_BANDS, 7, 3, 5);
+            aggregateBands(1, rb.data(), FREQ_BANDS, 7, 3, 5);
             applySmoothingAndOutput<7>(prev_left_spectrum.data(), lb.data(), left_out.data());
             applySmoothingAndOutput<7>(prev_right_spectrum.data(), rb.data(), right_out.data());
         }
 
         void getLargeSpectrumData(std::array<int, 64>& left_out, std::array<int, 64>& right_out) {
             std::array<float, 64> lb{}, rb{};
-            fillTempBuffers();
-            computeChannel(temp_left, lb.data(), FREQ_BANDS_LARGE, 64, 24, 44);
-            computeChannel(temp_right, rb.data(), FREQ_BANDS_LARGE, 64, 24, 44);
+            aggregateBands(0, lb.data(), FREQ_BANDS_LARGE, 64, 24, 44);
+            aggregateBands(1, rb.data(), FREQ_BANDS_LARGE, 64, 24, 44);
             applySmoothingAndOutput<64>(prev_left_spectrum_large.data(), lb.data(), left_out.data());
             applySmoothingAndOutput<64>(prev_right_spectrum_large.data(), rb.data(), right_out.data());
         }
@@ -1384,11 +1712,7 @@ class AudioProcessor {
 
         void getWaveformData(float* out, int samples, bool left_channel) {
             std::lock_guard<std::mutex> lock(buffer_mutex);
-            size_t read_pos = (write_pos + FFT_SIZE_BASS * 2 - samples) % (FFT_SIZE_BASS * 2);
-            for (int i = 0; i < samples; i++) {
-                out[i] = left_channel ? circular_buffer_left[read_pos] : circular_buffer_right[read_pos];
-                read_pos = (read_pos + 1) % (FFT_SIZE_BASS * 2);
-            }
+            copyWindow(out, left_channel ? circular_buffer_left : circular_buffer_right, (size_t)samples);
         }
 
         void setSensitivity(int v) { sensitivity = std::clamp((float)v, 10.0f, 300.0f); updateParameters(); }
@@ -1505,18 +1829,12 @@ class VUMeterViz : public Visualization {
         std::array<DBPosition, 11> db_positions;
         static constexpr const char* POWER_SCALE[6] = {"0", "20", "40", "60", "80", "100"};
 
+        // log10(10^(dB/20)) == dB/20, so the scale is linear in dB over [-20, +3]
         void calculateDBPositions() {
-            const float db_values[11] = {-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3};
-            for (int i = 0; i < 11; i++) {
-                float value = powf(10.0f, db_values[i] / 20.0f);
-                float log_pos = log10f(value);
-                float min_log = log10f(powf(10.0f, -20.0f / 20.0f));
-                float max_log = log10f(powf(10.0f, 3.0f / 20.0f));
-                db_positions[i].x = (int)((log_pos - min_log) / (max_log - min_log) * 125.0f);
-                static char texts[11][4];
-                snprintf(texts[i], 4, "%d", abs((int)db_values[i]));
-                db_positions[i].text = texts[i];
-            }
+            static constexpr int db_values[11] = {-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3};
+            static constexpr const char* texts[11] = {"20", "10", "7", "5", "3", "2", "1", "0", "1", "2", "3"};
+            for (int i = 0; i < 11; i++)
+                db_positions[i] = {(db_values[i] + 20) * 125 / 23, texts[i]};
         }
 
         VUMeterViz(Display* l, Display* r, MPDClient* m, BluetoothMonitor* bt, FontManager* f)
@@ -1551,11 +1869,15 @@ class VUMeterViz : public Visualization {
         }
 };
 
+static constexpr const char* SPECTRUM_LABELS[7] = {"63", "160", "400", "1K", "2.5K", "6.3K", "16K"};
+
 class SpectrumViz : public Visualization {
-    std::array<float, 7> peak_l{}, peak_r{};
-    const char* LABELS[7] = {"63", "160", "400", "1K", "2.5K", "6.3K", "16K"};
+    // Peaks start resting on the floor instead of falling from the top row
+    std::array<float, 7> peak_l, peak_r;
     public:
-        SpectrumViz(Display* l, Display* r, MPDClient* m, BluetoothMonitor* bt, FontManager* f) : Visualization(l,r,m,bt,f) {}
+        SpectrumViz(Display* l, Display* r, MPDClient* m, BluetoothMonitor* bt, FontManager* f) : Visualization(l,r,m,bt,f) {
+            peak_l.fill(56.0f); peak_r.fill(56.0f);
+        }
         const char* getName() const override { return "Spectrum"; }
         void render(ControlState&, AudioProcessor& audio) override {
             std::array<int, 7> l, r; audio.getSpectrumData(l, r);
@@ -1569,13 +1891,12 @@ class SpectrumViz : public Visualization {
                 if (y < peaks[i]) peaks[i] = y;
                 else peaks[i] = std::min(56.0f, peaks[i] + 0.5f);
                 d->drawLine(x, (int)peaks[i], x+11, (int)peaks[i]);
-                d->drawText(x, 64, LABELS[i], FontManager::SMALL);
+                d->drawText(x, 64, SPECTRUM_LABELS[i], FontManager::SMALL);
             }
         }
 };
 
 class EmptySpectrumViz : public Visualization {
-    const char* LABELS[7] = {"63", "160", "400", "1K", "2.5K", "6.3K", "16K"};
     public:
         EmptySpectrumViz(Display* l, Display* r, MPDClient* m, BluetoothMonitor* bt, FontManager* f) : Visualization(l,r,m,bt,f) {}
         const char* getName() const override { return "Empty Spectrum"; }
@@ -1588,7 +1909,7 @@ class EmptySpectrumViz : public Visualization {
             for (int i = 0; i < 7; i++) {
                 int x = 1+i*19, h = (data[i]*49)/255, y = 57-h, w = 12;
                 if (h > 0) { d->drawLine(x,57,x,y); d->drawLine(x+w,57,x+w,y); d->drawLine(x,y,x+w,y); }
-                d->drawText(x, 64, LABELS[i], FontManager::SMALL);
+                d->drawText(x, 64, SPECTRUM_LABELS[i], FontManager::SMALL);
             }
         }
 };
@@ -1614,19 +1935,20 @@ class WaveformViz : public Visualization {
 
 class TrackInfoViz : public Visualization {
     private:
-        std::array<float, 7> peak_l{}, peak_r{};
+        std::array<float, 7> peak_l, peak_r;
         TextScroller info_scroller;
     public:
-        TrackInfoViz(Display* l, Display* r, MPDClient* m, BluetoothMonitor* bt, FontManager* f) : Visualization(l,r,m,bt,f) {}
+        TrackInfoViz(Display* l, Display* r, MPDClient* m, BluetoothMonitor* bt, FontManager* f) : Visualization(l,r,m,bt,f) {
+            peak_l.fill(43.0f); peak_r.fill(43.0f);
+        }
         const char* getName() const override { return "Track Info"; }
 
-        void render(ControlState& state, AudioProcessor& audio) override {
+        void render(ControlState&, AudioProcessor& audio) override {
             left_display->clear();
             int y = 5;
             bool bt_active = bluetooth_monitor && bluetooth_monitor->isConnected();
 
             if (bt_active) {
-                bluetooth_monitor->updateElapsedTime();
                 info_scroller.setText(bluetooth_monitor->getFormattedText());
                 info_scroller.render(left_display, 1, y, Config::SCREEN_WIDTH, font_manager); y += 10;
                 left_display->drawText(1, y, "Source: Bluetooth", FontManager::SMALL); y += 10;
@@ -1642,27 +1964,25 @@ class TrackInfoViz : public Visualization {
                     if (pw > 2) left_display->drawRect(2, y+1, pw-2, 3, true);
                 }
             } else if (mpd_client) {
-                mpd_client->updateElapsedTime();
-                unsigned int elapsed = mpd_client->getElapsedTime(), total = mpd_client->getTotalTime();
+                MPDClient::Snapshot snap = mpd_client->getSnapshot();
 
-                std::stringstream info_line;
-                info_line << mpd_client->getTrackNumber() << ". " << mpd_client->getTitle();
-                std::string art = mpd_client->getArtist();
-                if (!art.empty() && art != "Unknown Artist") info_line << " - " << art;
-                std::string alb = mpd_client->getAlbum();
-                if (!alb.empty() && alb != "Unknown Album") info_line << " - " << alb;
-                std::string dt = mpd_client->getDate();
-                if (!dt.empty()) info_line << " (" << dt << ")";
+                std::string info_line = snap.track_number + ". " + snap.title;
+                if (!snap.artist.empty() && snap.artist != "Unknown Artist") info_line += " - " + snap.artist;
+                if (!snap.album.empty() && snap.album != "Unknown Album") info_line += " - " + snap.album;
+                if (!snap.date.empty()) info_line += " (" + snap.date + ")";
 
-                info_scroller.setText(info_line.str());
+                info_scroller.setText(info_line);
                 info_scroller.render(left_display, 1, y, Config::SCREEN_WIDTH-2, font_manager); y += 10;
 
-                left_display->drawText(1, y, ("Bitrate: "+mpd_client->getBitrate()).c_str(), FontManager::SMALL); y += 10;
-                left_display->drawText(1, y, mpd_client->getFormat().c_str(), FontManager::SMALL); y += 20;
-                left_display->drawText(1, y, (mpd_client->formatTime(elapsed)+" / "+mpd_client->formatTime(total)).c_str(), FontManager::SMALL); y += 5;
+                left_display->drawText(1, y, ("Bitrate: "+snap.bitrate_str).c_str(), FontManager::SMALL); y += 10;
+                left_display->drawText(1, y, snap.format_str.c_str(), FontManager::SMALL); y += 20;
+                char ts[32];
+                snprintf(ts, sizeof(ts), "%02u:%02u / %02u:%02u", snap.elapsed_time/60, snap.elapsed_time%60,
+                         snap.total_time/60, snap.total_time%60);
+                left_display->drawText(1, y, ts, FontManager::SMALL); y += 5;
 
-                if (total > 0) {
-                    int bw = 126, pw = (elapsed*bw)/total;
+                if (snap.total_time > 0) {
+                    int bw = 126, pw = (snap.elapsed_time*bw)/snap.total_time;
                     left_display->drawRect(1, y, bw, 5, false);
                     if (pw > 2) left_display->drawRect(2, y+1, pw-2, 3, true);
                 }
@@ -1703,7 +2023,8 @@ class TrackInfoViz : public Visualization {
 class PlaylistEditorViz : public Visualization {
     enum class EditorState { BROWSE_ALBUMS, BROWSE_TRACKS, FEEDBACK };
     EditorState editor_state = EditorState::BROWSE_ALBUMS;
-    bool albums_loaded = false, loading = false;
+    EditorState feedback_return = EditorState::BROWSE_ALBUMS;
+    std::atomic<bool> albums_loaded{false}, loading{false}; // written by load_thread
     std::vector<std::string> albums;
     std::vector<MPDClient::TrackInfo> tracks;
     int album_cursor = 0, album_scroll = 0, track_cursor = 0, track_scroll = 0;
@@ -1711,15 +2032,11 @@ class PlaylistEditorViz : public Visualization {
     std::chrono::steady_clock::time_point feedback_ts;
     std::thread load_thread;
     std::mutex data_mtx;
-    bool prev_up = false, prev_dn = false, prev_sel = false, prev_back = false;
     static constexpr int VISIBLE_LINES = 6, LINE_H = 9, LIST_Y0 = 18, HEADER_Y = 7;
 
     std::string truncatePx(const std::string& s, int max_px) {
         if (!font_manager) return s.substr(0, 20);
-        if (font_manager->getTextWidth(s.c_str(), FontManager::SMALL) <= max_px) return s;
-        std::string r = s;
-        while (r.size() > 2 && font_manager->getTextWidth((r+"..").c_str(), FontManager::SMALL) > max_px) r.pop_back();
-        return r + "..";
+        return font_manager->truncateToWidth(s, max_px, FontManager::SMALL);
     }
 
     void drawSelectionRow(Display* d, int row, const std::string& label, bool sel) {
@@ -1739,8 +2056,10 @@ class PlaylistEditorViz : public Visualization {
         d->drawLine(127, bt, 127, bb); d->drawRect(126, ty, 2, th, true);
     }
 
+    // Show msg for a moment, then go back to the list it was triggered from
     void setFeedback(const std::string& msg) {
         feedback_msg = msg; feedback_ts = std::chrono::steady_clock::now();
+        feedback_return = editor_state;
         editor_state = EditorState::FEEDBACK;
     }
 
@@ -1772,7 +2091,7 @@ class PlaylistEditorViz : public Visualization {
         if (editor_state == EditorState::FEEDBACK) {
             int ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - feedback_ts).count();
-            if (ms > 1500) editor_state = EditorState::BROWSE_ALBUMS;
+            if (ms > 1500) editor_state = feedback_return;
             d->drawRect(8,22,112,20,false); d->drawRect(9,23,110,18,false);
             int tw = font_manager ? font_manager->getTextWidth(feedback_msg.c_str(), FontManager::SMALL) : 0;
             d->drawText((128-tw)/2, 35, feedback_msg.c_str(), FontManager::SMALL);
@@ -1795,7 +2114,7 @@ class PlaylistEditorViz : public Visualization {
             for (int i = 0; i < VISIBLE_LINES && track_scroll+i < total; i++) {
                 int idx = track_scroll+i;
                 std::string lbl;
-                if (idx == 0) lbl = "> PLay album";
+                if (idx == 0) lbl = "> Play album";
                 else if (idx == 1) lbl = "+ Add album";
                 else { auto& t = tracks[idx-2]; lbl = t.track_num.empty() ? t.title : t.track_num+". "+t.title; }
                 drawSelectionRow(d, i, lbl, idx == track_cursor);
@@ -1833,13 +2152,12 @@ class PlaylistEditorViz : public Visualization {
 
     void onActivate() {
         if (!albums_loaded && !loading) startLoadAlbums();
-        prev_sel = false; prev_back = false;
     }
 
     bool handleInput(bool btn_up, bool btn_dn, bool btn_sel, bool btn_back) {
         bool want_exit = false;
         if (editor_state == EditorState::FEEDBACK) {
-            if (btn_sel || btn_back) editor_state = EditorState::BROWSE_ALBUMS;
+            if (btn_sel || btn_back) editor_state = feedback_return;
             return false;
         }
         if (editor_state == EditorState::BROWSE_ALBUMS) {
@@ -1868,10 +2186,10 @@ class PlaylistEditorViz : public Visualization {
             if (btn_up) { track_cursor = std::max(track_cursor-1, 0);
                 if (track_cursor < track_scroll) track_scroll = track_cursor; }
             if (btn_sel) {
-                if (track_cursor == 0) { mpd_client->clearAndPlayAlbum(selected_album); setFeedback("  Play !"); }
-                else if (track_cursor == 1) { mpd_client->addAlbumToQueue(selected_album); setFeedback("  Album added !"); }
+                if (track_cursor == 0) { mpd_client->clearAndPlayAlbum(selected_album); setFeedback("Play !"); }
+                else if (track_cursor == 1) { mpd_client->addAlbumToQueue(selected_album); setFeedback("Album added !"); }
                 else { int ti = track_cursor-2;
-                    if (ti < (int)tracks.size()) { mpd_client->addTrackToQueue(tracks[ti].file); setFeedback("  Track added !"); } }
+                    if (ti < (int)tracks.size()) { mpd_client->addTrackToQueue(tracks[ti].file); setFeedback("Track added !"); } }
             }
         }
         return want_exit;
@@ -1906,9 +2224,16 @@ class RotaryEncoder {
 
 #ifndef USE_BCM2835
     // lgpio interrupt-driven callbacks
+    // Use each alert's reported level: re-reading the pins would see only the
+    // final state of a burst and drop the intermediate quadrature steps
     static void rotaryCB(int num_alerts, lgGpioAlert_p alerts, void* user) {
         auto* self = static_cast<RotaryEncoder*>(user);
-        for (int i = 0; i < num_alerts; i++) self->onRotaryEdge();
+        for (int i = 0; i < num_alerts; i++) {
+            const auto& r = alerts[i].report;
+            if (r.level > 1) continue; // watchdog report, not an edge
+            uint8_t mask = ((int)r.gpio == self->clk_pin_) ? 0b10 : 0b01;
+            self->step(r.level ? (self->state_ | mask) : (self->state_ & ~mask));
+        }
     }
 
     static void buttonCB(int num_alerts, lgGpioAlert_p alerts, void* user) {
@@ -1933,7 +2258,7 @@ class RotaryEncoder {
 
     void pollLoop() {
         while (poll_running_) {
-            onRotaryEdge();
+            step(readPins());
 
             bool btn_cur = (hw->digitalRead(sw_pin_) == 0);
             if (btn_cur && !btn_prev_) {
@@ -1951,12 +2276,13 @@ class RotaryEncoder {
     }
 #endif
 
-    void onRotaryEdge() {
-        uint8_t cur = static_cast<uint8_t>(
-            (hw->digitalRead(clk_pin_) << 1) | hw->digitalRead(dt_pin_));
-        int8_t step = TRANS_[(state_ << 2) | cur];
+    uint8_t readPins() const {
+        return static_cast<uint8_t>((hw->digitalRead(clk_pin_) << 1) | hw->digitalRead(dt_pin_));
+    }
+
+    void step(uint8_t cur) {
+        accumulator_ += TRANS_[(state_ << 2) | cur];
         state_ = cur;
-        accumulator_ += step;
 
         if (accumulator_ >= detent_threshold_) {
             accumulator_ -= detent_threshold_;
@@ -1983,8 +2309,7 @@ public:
         lgGpioSetDebounce(h, dt_pin_, 5);
         lgGpioSetDebounce(h, sw_pin_, 5000);
 
-        state_ = static_cast<uint8_t>(
-            (lgGpioRead(h, clk_pin_) << 1) | lgGpioRead(h, dt_pin_));
+        state_ = readPins();
 
         lgGpioSetAlertsFunc(h, clk_pin_, rotaryCB, this);
         lgGpioSetAlertsFunc(h, dt_pin_, rotaryCB, this);
@@ -1994,8 +2319,7 @@ public:
         hw->claimInputPullUp(clk_pin_);
         hw->claimInputPullUp(dt_pin_);
         hw->claimInputPullUp(sw_pin_);
-        state_ = static_cast<uint8_t>(
-            (hw->digitalRead(clk_pin_) << 1) | hw->digitalRead(dt_pin_));
+        state_ = readPins();
         btn_prev_ = (hw->digitalRead(sw_pin_) == 0);
 
         poll_running_ = true;
@@ -2043,11 +2367,22 @@ class VisualizerApp {
     FontManager font_mgr;
     ControlState state;
     std::vector<std::unique_ptr<Visualization>> vizs;
+    PlaylistEditorViz* editor_viz = nullptr;
+    int editor_index = -1;
     RotaryEncoder rotary{Config::ROT_CLK, Config::ROT_DT, Config::ROT_SW};
     bool prev_viz_sw = false;
+    bool prev_play_sw = false, prev_fw_sw = false, prev_rw_sw = false;
+    std::chrono::steady_clock::time_point last_transport_btn{};
+
+    int nextVizSkippingEditor(int cur) {
+        int n = (int)vizs.size();
+        int next = (cur + 1) % n;
+        if (next == editor_index) next = (next + 1) % n;
+        return next;
+    }
 
     void onBluetoothConnectionChange(bool connected) {
-        if (connected) { printf("Bluetooth connected - pausing MPD\n"); mpd->playPause(); }
+        if (connected) { printf("Bluetooth connected - pausing MPD\n"); mpd->pause(); }
         else printf("Bluetooth disconnected\n");
     }
 
@@ -2058,34 +2393,19 @@ class VisualizerApp {
     void drawVolumeOverlay(Display* d) {
         int vol = overlay_volume;
         if (vol < 0) return;
-        d->drawRect(14, 24, 100, 18, false);
-        for (int py = 25; py < 41; py++) {
-            int row = (py/8)*Config::SCREEN_WIDTH;
-            uint8_t mask = ~(1 << (py%8));
-            for (int px = 15; px < 113; px++) d->buffer[row+px] &= mask;
-        }
+        d->fillRect(15, 25, 98, 16, false);
         d->drawRect(14, 24, 100, 18, false);
         int bar_w = (vol*88)/100;
         d->drawRect(18, 28, 88, 8, false);
         if (bar_w > 0) d->drawRect(18, 28, bar_w, 8, true);
-        char buf[8]; snprintf(buf, sizeof(buf), "%d%%", vol);
+        char buf[12]; snprintf(buf, sizeof(buf), "%d%%", vol);
         int tw = font_mgr.isInitialized() ? font_mgr.getTextWidth(buf, FontManager::SMALL) : 0;
         d->drawText((128-tw)/2, 23, buf, FontManager::SMALL);
     }
 
-    void blankRows(Display* d, int from, int to) {
-        int first_full = (from + 7) / 8, last_full = to / 8;
-        for (int p = first_full; p < last_full; p++) memset(&d->buffer[p*128], 0, 128);
-        if (from/8 < first_full) {
-            int p = from/8; uint8_t m = 0;
-            for (int b = from%8; b < 8; b++) m |= (1<<b);
-            for (int px = 0; px < 128; px++) d->buffer[p*128+px] &= ~m;
-        }
-        if (to%8 != 0 && last_full < 8) {
-            int p = last_full; uint8_t m = 0;
-            for (int b = 0; b < to%8; b++) m |= (1<<b);
-            for (int px = 0; px < 128; px++) d->buffer[p*128+px] &= ~m;
-        }
+    // Clear rows [from, to)
+    static void blankRows(Display* d, int from, int to) {
+        d->fillRect(0, from, Config::SCREEN_WIDTH, to - from, false);
     }
 
     void animateCRTBoth(bool power_on) {
@@ -2102,13 +2422,12 @@ class VisualizerApp {
 
             Display* screens[2] = { d_left.get(), d_right.get() };
             uint8_t* saved[2] = { saved_left, saved_right };
+            float phase_t = (float)elapsed / (float)total_ms;
+            if (power_on) phase_t = 1.0f - phase_t;
 
             for (int s = 0; s < 2; s++) {
                 auto* d = screens[s];
                 memcpy(d->buffer, saved[s], Config::SPI_CHUNK_SIZE);
-
-                float phase_t = (float)elapsed / (float)total_ms;
-                if (power_on) phase_t = 1.0f - phase_t;
 
                 if (phase_t < 0.5f) {
                     float p = phase_t * 2.0f;
@@ -2121,10 +2440,7 @@ class VisualizerApp {
                     float p = (phase_t - 0.5f) * 2.0f;
                     int hw_ = (int)(64.0f * (1.0f - p));
                     int xs = 64-hw_, xe = 64+hw_;
-                    blankRows(d, 0, 32); blankRows(d, 33, 64);
-                    uint8_t mask = (1 << 0);
-                    for (int px = 0; px < xs; px++) d->buffer[4*128+px] &= ~mask;
-                    for (int px = xe+1; px < 128; px++) d->buffer[4*128+px] &= ~mask;
+                    d->clear();
                     for (int px = xs; px <= xe; px++) d->drawPixel(px, 32);
                 }
                 d->display();
@@ -2152,17 +2468,24 @@ class VisualizerApp {
             }
         }
 
+        d_left->drawText(34, 35, "Starting...", FontManager::SMALL);
+        d_left->display();
+
         mpd = std::make_unique<MPDClient>(); mpd->start();
         bluetooth = std::make_unique<BluetoothMonitor>();
         bluetooth->start([this](bool c) { onBluetoothConnectionChange(c); });
         audio = std::make_unique<AudioProcessor>();
+        d_left->clear();
 
         vizs.push_back(std::make_unique<VUMeterViz>(d_left.get(), d_right.get(), mpd.get(), bluetooth.get(), &font_mgr));
         vizs.push_back(std::make_unique<SpectrumViz>(d_left.get(), d_right.get(), mpd.get(), bluetooth.get(), &font_mgr));
         vizs.push_back(std::make_unique<EmptySpectrumViz>(d_left.get(), d_right.get(), mpd.get(), bluetooth.get(), &font_mgr));
         vizs.push_back(std::make_unique<WaveformViz>(d_left.get(), d_right.get(), mpd.get(), bluetooth.get(), &font_mgr));
         vizs.push_back(std::make_unique<TrackInfoViz>(d_left.get(), d_right.get(), mpd.get(), bluetooth.get(), &font_mgr));
-        vizs.push_back(std::make_unique<PlaylistEditorViz>(d_left.get(), d_right.get(), mpd.get(), bluetooth.get(), &font_mgr));
+        auto editor = std::make_unique<PlaylistEditorViz>(d_left.get(), d_right.get(), mpd.get(), bluetooth.get(), &font_mgr);
+        editor_viz = editor.get();
+        editor_index = (int)vizs.size();
+        vizs.push_back(std::move(editor));
 
         setupGPIO();
     }
@@ -2192,69 +2515,68 @@ class VisualizerApp {
         bool viz_pressed = viz_raw && !prev_viz_sw;
         prev_viz_sw = viz_raw;
 
+        bool play_raw = (hw->digitalRead(Config::PLAY_SW) == 0);
+        bool fw_raw = (hw->digitalRead(Config::FW_SW) == 0);
+        bool rw_raw = (hw->digitalRead(Config::RW_SW) == 0);
+        bool play_pressed = play_raw && !prev_play_sw;
+        bool fw_pressed = fw_raw && !prev_fw_sw;
+        bool rw_pressed = rw_raw && !prev_rw_sw;
+        prev_play_sw = play_raw; prev_fw_sw = fw_raw; prev_rw_sw = rw_raw;
+
         bool any_button = viz_pressed || rot_btn || (rot != 0)
-                       || (hw->digitalRead(Config::PLAY_SW) == 0)
-                       || (hw->digitalRead(Config::FW_SW) == 0)
-                       || (hw->digitalRead(Config::RW_SW) == 0);
+                       || play_raw || fw_raw || rw_raw;
         if (any_button) audio->resetSleepTimer();
 
-        auto* editor = dynamic_cast<PlaylistEditorViz*>(vizs[state.current_viz].get());
-
-        if (editor) {
+        if (state.current_viz == editor_index) {
             bool want_exit = false;
             for (int i = 0; i < abs(rot); i++)
-                want_exit |= editor->handleInput(rot<0, rot>0, false, false);
+                want_exit |= editor_viz->handleInput(rot<0, rot>0, false, false);
             if (rot_btn || viz_pressed)
-                want_exit |= editor->handleInput(false, false, rot_btn, viz_pressed);
+                want_exit |= editor_viz->handleInput(false, false, rot_btn, viz_pressed);
 
             if (want_exit) {
-                int n = (int)vizs.size();
-                state.current_viz = (state.current_viz+1) % n;
-                if (dynamic_cast<PlaylistEditorViz*>(vizs[state.current_viz].get()))
-                    state.current_viz = (state.current_viz+1) % n;
+                state.current_viz = nextVizSkippingEditor(state.current_viz);
                 printf("Sortie editeur -> %s\n", vizs[state.current_viz]->getName());
             }
         } else {
             if (viz_pressed) {
-                int n = (int)vizs.size();
-                state.current_viz = (state.current_viz+1) % n;
-                if (dynamic_cast<PlaylistEditorViz*>(vizs[state.current_viz].get()))
-                    state.current_viz = (state.current_viz+1) % n;
+                state.current_viz = nextVizSkippingEditor(state.current_viz);
                 printf("Viz: %s\n", vizs[state.current_viz]->getName());
             }
             if (rot != 0) {
-                mpd->setVolume(rot * 2);
-                overlay_volume = mpd->getVolume();
+                overlay_volume = mpd->setVolume(rot * 2);
                 overlay_ts = std::chrono::steady_clock::now();
             }
-            if (rot_btn) {
-                for (int i = 0; i < (int)vizs.size(); i++) {
-                    if (auto* ed = dynamic_cast<PlaylistEditorViz*>(vizs[i].get())) {
-                        state.current_viz = i; ed->onActivate();
-                        printf("Ouverture editeur (ROT_SW)\n"); break;
-                    }
-                }
+            if (rot_btn && editor_viz) {
+                state.current_viz = editor_index;
+                editor_viz->onActivate();
+                printf("Ouverture editeur (ROT_SW)\n");
             }
-            if (hw->digitalRead(Config::PLAY_SW) == 0) { mpd->playPause(); hw->delay(200); }
-            if (hw->digitalRead(Config::FW_SW) == 0)   { mpd->nextTrack(); hw->delay(200); }
-            if (hw->digitalRead(Config::RW_SW) == 0)    { mpd->prevTrack(); hw->delay(200); }
+            // Edge-triggered with a 200ms lockout instead of a blocking delay
+            auto now = std::chrono::steady_clock::now();
+            if (now - last_transport_btn > std::chrono::milliseconds(200)) {
+                // A connected phone takes the transport buttons; MPD otherwise
+                if (play_pressed)    { if (!bluetooth->playPause()) mpd->playPause(); last_transport_btn = now; }
+                else if (fw_pressed) { if (!bluetooth->next())      mpd->nextTrack(); last_transport_btn = now; }
+                else if (rw_pressed) { if (!bluetooth->previous())  mpd->prevTrack(); last_transport_btn = now; }
+            }
         }
     }
 
     void run() {
-        if (!audio->start()) return;
+        if (!audio->start()) { printf("Audio capture init failed\n"); return; }
         using namespace std::chrono;
         auto next_frame = steady_clock::now();
         auto last_user_input = steady_clock::now();
-        uint32_t auto_cycle_frames = 0;
-        constexpr uint32_t CYCLE_INTERVAL = 36000;
+        auto last_cycle = steady_clock::now();
+        constexpr auto CYCLE_INTERVAL = minutes(10);
+        int prev_viz = state.current_viz;
 
         while (state.running && !g_shutdown_req) {
             pollControls();
-            static int prev_viz = state.current_viz;
             if (state.current_viz != prev_viz) {
                 last_user_input = steady_clock::now();
-                auto_cycle_frames = 0; prev_viz = state.current_viz;
+                last_cycle = last_user_input; prev_viz = state.current_viz;
             }
             bool has_audio = audio->checkForAudio();
 
@@ -2265,30 +2587,27 @@ class VisualizerApp {
                 hw->digitalWrite(Config::POWER_LED, 0);
             } else if (has_audio && state.is_sleeping) {
                 state.is_sleeping = false; audio->setSleepState(false);
+                last_cycle = steady_clock::now();
                 d_left->wake(); d_right->wake();
                 hw->digitalWrite(Config::POWER_LED, 1);
+                audio->update();
                 vizs[state.current_viz]->render(state, *audio);
                 animateCRTBoth(true);
             }
 
             if (!state.is_sleeping) {
-                bool in_editor = dynamic_cast<PlaylistEditorViz*>(vizs[state.current_viz].get()) != nullptr;
+                bool in_editor = (state.current_viz == editor_index);
 
                 if (!in_editor) {
-                    auto since = duration_cast<seconds>(steady_clock::now()-last_user_input).count();
-                    if (since > 30) {
-                        auto_cycle_frames++;
-                        if (auto_cycle_frames >= CYCLE_INTERVAL) {
-                            int n = (int)vizs.size();
-                            state.current_viz = (state.current_viz+1) % n;
-                            if (dynamic_cast<PlaylistEditorViz*>(vizs[state.current_viz].get()))
-                                state.current_viz = (state.current_viz+1) % n;
-                            printf("Auto-cycle to: %s\n", vizs[state.current_viz]->getName());
-                            auto_cycle_frames = 0;
-                        }
+                    auto now = steady_clock::now();
+                    if (now - last_user_input > seconds(30) && now - last_cycle >= CYCLE_INTERVAL) {
+                        state.current_viz = nextVizSkippingEditor(state.current_viz);
+                        printf("Auto-cycle to: %s\n", vizs[state.current_viz]->getName());
+                        last_cycle = now;
                     }
-                } else auto_cycle_frames = 0;
+                }
 
+                audio->update();
                 vizs[state.current_viz]->render(state, *audio);
 
                 if (!in_editor && overlay_volume >= 0) {
@@ -2313,6 +2632,7 @@ class VisualizerApp {
 void sig_handler(int) { g_shutdown_req = true; }
 
 int main() {
+    setvbuf(stdout, nullptr, _IOLBF, 0); // keep printf visible in the journal
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
 

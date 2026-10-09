@@ -1,0 +1,21 @@
+[Unit]
+Description=OLED Audio Visualizer (rav-audio)
+After=network.target sound.target mpd.service
+
+[Service]
+Type=simple
+# Root: the bcm2835 backend drives GPIO/SPI through /dev/mem
+ExecStart=/usr/bin/rav-visualizer
+# Fonts are looked up relative to the working directory
+WorkingDirectory=/usr/share/rav-audio
+# FFTW wisdom cache (STATE_DIRECTORY)
+StateDirectory=rav-audio
+Restart=always
+RestartSec=2
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

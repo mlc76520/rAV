@@ -1,3 +1,7 @@
+NOTE (2026-10): legacy. This bluez-alsa setup is superseded by PipeWire /
+WirePlumber, configured by the rav-audio Debian package (see README.md).
+Kept for reference only.
+
 ================================================================================
 BLUETOOTH A2DP SETUP FOR RASPBERRY PI AUDIO VISUALIZER
 ================================================================================

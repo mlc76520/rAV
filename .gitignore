@@ -1,0 +1,10 @@
+# Build outputs
+visualizer
+visualizer.*
+*.deb
+
+# Local backups
+*.bak-*
+
+# Unused, third-party licence unknown
+DS-DIGI.TTF

@@ -1,0 +1,18 @@
+Package: rav-audio
+Version: @VERSION@
+Architecture: arm64
+Maintainer: jch.pallier <jch.pallier@gmail.com>
+Installed-Size: @SIZE@
+Depends: @SHLIBS@, mpd (>= 0.24), pipewire, pipewire-bin, wireplumber, libspa-0.2-bluetooth, bluez, bluez-tools, systemd
+Recommends: fonts-dejavu-core
+Section: sound
+Priority: optional
+Description: SalonRPI audio box: MPD, PipeWire, Bluetooth and dual OLED visualizer
+ Turns a Raspberry Pi 3 with two SSD1309 OLEDs into a music player: MPD
+ and Bluetooth A2DP play through PipeWire (running as user mpd), and the
+ visualizer draws the monitor of the output on the OLEDs. The transport
+ buttons drive MPD, or the connected phone over AVRCP.
+ .
+ Output: an I2S DAC such as a HifiBerry when its overlay is enabled,
+ otherwise the onboard headphone jack (dtparam=audio=on). Needs
+ dtparam=spi=on for the OLEDs.

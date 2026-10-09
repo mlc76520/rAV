@@ -1,0 +1,18 @@
+[Unit]
+Description=Make Bluetooth Discoverable (rav-audio)
+After=bluetooth.service bt-agent.service
+Requires=bluetooth.service
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bluetoothctl discoverable on
+RemainAfterExit=yes
+# At boot bluetoothd can be up before its controller is exported on D-Bus
+# ("No default controller available"): retry until it is
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
