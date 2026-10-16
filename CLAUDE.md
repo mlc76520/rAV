@@ -95,7 +95,9 @@ Garder le style et la densité de commentaires de `rav_unified.cpp`.
 - **État au 2026-10-16** :
   - le paquet installe encore le C++ ;
   - avant la fusion, la version SSD1309 seule avait été testée sur le matériel ;
-  - la version fusionnée compile, en 10 min 45 s sur le Pi 3 avec `-j 1`, et passe le test de rendu, mais **elle n'a pas encore été testée sur le matériel**.
+  - la version fusionnée compile, en 10 min 45 s sur le Pi 3 avec `-j 1`, et passe le test de rendu ;
+  - elle a été **testée sur le matériel SSD1309** : affichage, capture, éditeur et cycle VIZ fonctionnent, avec 7 % de CPU et 10 Mo de mémoire ;
+  - le SSD1322 n'a été vérifié que par le test de rendu.
 - **Choix du profil, au démarrage** : la variable `RAV_DISPLAY`, sinon `display = ssd1309|ssd1322` dans `/etc/rav-audio/visualizer.conf`, sinon SSD1309.
 - **Contenu d'un profil** (`src/profile.rs`) : écran, taille, vitesse SPI, broches, police et ses tailles, FFT basse, table de bandes, sens de la molette, overlay de volume, liste des visualisations et fonctions activées.
   - SSD1309 : FW en GPIO 9, FFT de 4096 et 64 bandes, police trixel en 8/10/14 px, transition et extinction activées, sans visualisations cachées.
@@ -119,6 +121,9 @@ Garder le style et la densité de commentaires de `rav_unified.cpp`.
   - `.cargo/config.toml` choisit des dépendances compatibles avec Rust 1.85, par exemple zbus 5.13. Ne pas exiger de versions plus récentes dans `Cargo.toml`.
 - **Test de rendu sans matériel** : `cargo test --release render -- --nocapture`. Il écrit chaque visualisation des deux profils en PNG dans `rust/target/render/`, avec un seuil appliqué pour le SSD1309. C'est le seul moyen de vérifier le SSD1322 sur ce Pi.
 - **GPIO 9 (bouton FW, SSD1309)** : le noyau le réserve comme MISO de SPI0, et le bouton est alors désactivé avec un avertissement. Pour le libérer, remplacer `dtparam=spi=on` par `dtoverlay=spi0-2cs,no_miso` dans `config.txt`.
+- **Piège : tester juste après le C++.** À sa sortie, la bibliothèque bcm2835 du C++ remet les broches SPI (GPIO 7 à 11) en entrée (`bcm2835_spi_end`). spidev n'affiche alors plus rien, alors que les boutons, eux, marchent toujours.
+  - Pour rétablir : `sudo pinctrl set 9-11 a0 && sudo pinctrl set 7-8 op dh`, ou redémarrer.
+  - Le problème disparaîtra quand le paquet installera la version Rust.
 - **Tester sans le paquet** : `sudo systemctl stop audio-visualizer`, puis `sudo env PIPEWIRE_RUNTIME_DIR=/run/user/$(id -u mpd) RAV_DISPLAY=ssd1309 …/rust/target/release/rav-visualizer`, lancé depuis `/usr/share/rav-audio`. Relancer ensuite le service.
 - **Tester sans toucher à la file MPD** : `sudo -u mpd XDG_RUNTIME_DIR=/run/user/$(id -u mpd) pw-play <fichier>`.
 
