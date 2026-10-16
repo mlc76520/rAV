@@ -122,12 +122,11 @@ Garder le style et la densité de commentaires du code existant.
 - **2026-10-16** :
   - fusion des deux portages Rust en un seul programme à profils ;
   - passage du paquet à la version Rust : 2.0.0, puis 2.0.1 (`ProtectHome`), puis 2.0.2 (FW en GPIO 4) ;
-  - 2.0.3 : `visualizer.conf` enfin suivi par git (il était masqué par `visualizer.*` dans `.gitignore`), règle de priorité I2S valable sur Pi 5, MPD sur toutes les interfaces. Installé sur le BureauRPI, à la place de l'installation manuelle (`rav.service`, sauvegardée dans `~/rav/backup_pre_rav-audio_2026-10-16/`).
+  - 2.0.3 : `visualizer.conf` enfin suivi par git (il était masqué par `visualizer.*` dans `.gitignore`), règle de priorité I2S valable sur Pi 5, MPD sur toutes les interfaces. Installé sur le SalonRPI et sur le BureauRPI ; sur ce dernier, à la place de l'installation manuelle (`rav.service`, sauvegardée dans `~/rav/backup_pre_rav-audio_2026-10-16/`).
 
 ## Non vérifié ou à faire
 
 - La désinstallation du paquet n'a jamais été testée.
-- Le SalonRPI est encore en 2.0.2 (MPD limité à `localhost`) : y installer la 2.0.3.
 - **BureauRPI** : `/etc/wireplumber/wireplumber.conf.d/60-local-headroom.conf` (hors paquet) garde `api.alsa.headroom = 8192`, environ 186 ms d'avance pour la synchro, en attendant de nouvelles mesures. Décider ensuite de l'intégrer au paquet ou de le retirer.
 - Le nom du nœud du jack intégré, `alsa_output.platform-bcm2835_audio.*`, n'a pas été vérifié sur du matériel.
 - L'extinction par appui long sur PLAY n'a pas été essayée en vrai : seule la règle polkit a été vérifiée.
