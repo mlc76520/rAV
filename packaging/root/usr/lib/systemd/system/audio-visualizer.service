@@ -4,16 +4,21 @@ After=network.target sound.target mpd.service
 
 [Service]
 Type=simple
-# Root: the bcm2835 backend drives GPIO/SPI through /dev/mem
+# Same user as MPD and its PipeWire instance; the panels and buttons only
+# need the gpio and spi groups (gpiochip/spidev), not root.
+User=mpd
+Group=audio
+SupplementaryGroups=gpio spi
 ExecStart=/usr/bin/rav-visualizer
 # Fonts are looked up relative to the working directory
 WorkingDirectory=/usr/share/rav-audio
-# FFTW wisdom cache (STATE_DIRECTORY)
-StateDirectory=rav-audio
 Restart=always
 RestartSec=2
-ProtectSystem=full
+NoNewPrivileges=yes
+ProtectSystem=strict
+# read-only, not yes: "yes" also hides /run/user, where PipeWire's socket is
 ProtectHome=read-only
+PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
 

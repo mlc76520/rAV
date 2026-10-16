@@ -101,7 +101,24 @@ EOT
         fi
     done
 
+    rm -f "$STATE/fftw_wisdom" # the C++ visualizer's FFTW cache (< 2.0.0)
+    display=$(sed -n 's/^[[:space:]]*display[[:space:]]*=[[:space:]]*\([a-z0-9]*\).*/\1/p' \
+              /etc/rav-audio/visualizer.conf 2>/dev/null | head -n 1)
+    echo "rav-audio: display panels: ${display:-ssd1309}"
+    if [ "$display" = ssd1322 ] && [ ! -f /usr/local/share/rav-audio/FreePixel.ttf ]; then
+        warn "FreePixel.ttf not in /usr/local/share/rav-audio (DejaVu Sans used instead)"
+    fi
+
     if [ -d /run/systemd/system ]; then
+        # Up to 1.x the visualizer was C++ with the bcm2835 library, which
+        # on exit leaves the SPI pins as inputs: the Rust one (spidev) would
+        # then show nothing until a reboot. Stop it here and restore them.
+        if [ -n "$2" ] && dpkg --compare-versions "$2" lt 2.0.0; then
+            systemctl stop audio-visualizer.service || true
+            if command -v pinctrl >/dev/null && grep -q "Raspberry Pi 3" /proc/device-tree/model 2>/dev/null; then
+                pinctrl set 9-11 a0 && pinctrl set 7-8 op dh || warn "could not restore the SPI pins (reboot)"
+            fi
+        fi
         loginctl enable-linger mpd || warn "could not enable linger for mpd"
         systemctl daemon-reload
         systemctl enable $UNITS

@@ -1,12 +1,14 @@
 #!/bin/sh
-# Build rav-audio_<version>_arm64.deb: compiles rav_unified.cpp (bcm2835
-# backend, Raspberry Pi 3) and packs it with packaging/root and the
-# maintainer scripts in packaging/debian.
+# Build rav-audio_<version>_arm64.deb: compiles the Rust visualizer in
+# rust/ (one binary for the SSD1309 and SSD1322 panels, any Pi) and packs
+# it with packaging/root and the maintainer scripts in packaging/debian.
 #   usage: packaging/build-deb.sh [version] [output dir]
+# Needs: cargo/rustc (Debian 13's 1.85 is enough), libclang-dev,
+# libpipewire-0.3-dev, libfreetype-dev, pkg-config.
 set -e
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-SRC=$HERE/../rav_unified.cpp
+CRATE=$HERE/../rust
 VERSION=${1:-1.0.0}
 OUT=$(cd "${2:-$HERE}" && pwd)
 STAGE=$(mktemp -d)
@@ -19,13 +21,12 @@ mkdir -p "$STAGE/usr/bin" "$STAGE/DEBIAN"
 find "$STAGE" -type d -exec chmod 755 {} +
 find "$STAGE" -type f -exec chmod 644 {} +
 
-echo "Compiling rav-visualizer..."
-g++ -o "$STAGE/usr/bin/rav-visualizer" "$SRC" \
-    -O3 -march=native -std=c++17 -DUSE_BCM2835 -Wall -Wextra \
-    -I/usr/include/freetype2 \
-    $(pkg-config --cflags --libs dbus-1 libpipewire-0.3) \
-    -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -pie -Wl,-z,relro,-z,now \
-    -lbcm2835 -lpthread -lasound -lfftw3f -lm -lfreetype -lmpdclient
+# Under 2 GB of RAM (Pi 3) a parallel build gets rustc OOM-killed during
+# the LTO link.
+JOBS=$(awk '/MemTotal/ { print ($2 < 2000000) ? 1 : 0 }' /proc/meminfo)
+echo "Compiling rav-visualizer ($([ "$JOBS" = 1 ] && echo "1 job, low memory" || echo "all cores"))..."
+(cd "$CRATE" && if [ "$JOBS" = 1 ]; then cargo build --release -j 1; else cargo build --release; fi)
+install -m 755 "$CRATE/target/release/rav-visualizer" "$STAGE/usr/bin/rav-visualizer"
 strip --strip-unneeded "$STAGE/usr/bin/rav-visualizer"
 chmod 755 "$STAGE/usr/bin/rav-visualizer"
 install -D -m 644 "$HERE/../trixel-square.ttf" "$STAGE/usr/share/rav-audio/trixel-square.ttf"

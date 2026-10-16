@@ -98,9 +98,9 @@ pub static SSD1309: Profile = Profile {
         right_rst: 22,
         viz: 27,
         play: 26,
-        // SPI0 MISO: the kernel keeps it unless config.txt uses
-        // dtoverlay=spi0-2cs,no_miso (the displays never read).
-        fw: 9,
+        // Was GPIO 9, which is SPI0 MISO and kept by the kernel for the
+        // display bus: rewired to GPIO 4 (physical pin 7) like the Pi 5 box.
+        fw: 4,
         rw: 6,
         led: 16,
         rot_clk: 17,
@@ -147,7 +147,8 @@ pub static SSD1322: Profile = Profile {
     },
     font_paths: &[
         "FreePixel.ttf",
-        "/usr/share/rav-audio/FreePixel.ttf",
+        // Not shipped in the package (licence): installed by hand.
+        "/usr/local/share/rav-audio/FreePixel.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ],
     font_px: [8, 16, 24],

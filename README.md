@@ -1,39 +1,38 @@
 # Raspberry Audio Visualizer
 
-A real-time stereo audio visualizer for Raspberry Pi that drives **two SSD1309 128×64 OLED displays** over SPI. Written in a single C++ file with a hardware abstraction layer that lets the same source build on both the **Raspberry Pi 5** (via `lgpio`) and the **Raspberry Pi 3B** (via `bcm2835`).
+A real-time stereo audio visualizer for the Raspberry Pi that drives **two OLED panels** over SPI, one per channel: either **SSD1309 128×64 monochrome** or **SSD1322 240×128 greyscale**. Written in Rust (`rust/`), it runs on the Raspberry Pi 3 and 5 alike.
 
-The project combines live FFT analysis of the system audio output, a full MPD client, Bluetooth (A2DP) metadata monitoring, and a small physical control surface (rotary encoder + four buttons) into a standalone "hi-fi display" appliance.
+The project combines live FFT analysis of what the box is playing, an MPD client, Bluetooth (A2DP + AVRCP) support and a small physical control surface (rotary encoder + four buttons) into a standalone "hi-fi display" appliance. A Debian package sets up the whole audio stack around it.
 ---
 ![Intro](img/20260417_084829.jpg)
 ---
 
 ## Features
 
-- **Six visualization modes**, switchable with a button or auto-cycled after 30 s of inactivity
-- **Two independent OLEDs** — left and right channels rendered separately
-- **Three-resolution FFT** (4096 / 2048 / 512 points) for accurate bass, mid, and treble bins with low latency
-- **64-band and 7-band spectrum analyzers** with peak-hold, smoothing, and gravity decay
-- **MPD integration** — now-playing info, play/pause, next/previous, volume, and a built-in album/track browser
-- **Bluetooth A2DP** via BlueZ D-Bus — track metadata, auto-pause MPD on BT connect, and the transport buttons drive the phone (AVRCP) while it is connected
-- **PipeWire capture** of the output monitor (ALSA loopback fallback), with a ready-made Debian package for the whole audio stack
-- **FreeType text rendering** with small / regular / large sizes and UTF-8 support
-- **Sleep mode** — after 10 s of silence, both displays fade out with a CRT-style shutdown animation; they wake when audio returns
-- **Unified build** — one source file, two backends, selected at compile time with `-DUSE_BCM2835`
+- **One program, two panel types**, chosen in `/etc/rav-audio/visualizer.conf`; each panel has its own set of visualizations drawn for its resolution
+- **Two independent OLEDs**: left and right channels rendered separately
+- **PipeWire capture** of the output's monitor: shows exactly what is played (MPD, Bluetooth, anything else) and lets the output suspend when idle
+- **Three-resolution FFT** (bass / mid / treble) for fine bass bins and fast treble, synced to the moment the sound reaches the speakers
+- **7-band and 64/120-band spectrum analyzers** with peak-hold, smoothing and gravity decay
+- **MPD integration**: now-playing info, play/pause, next/previous, volume and a built-in album/track browser
+- **Bluetooth A2DP**: track metadata, MPD auto-pause when a phone starts streaming; while a phone is the active source, the transport buttons and the knob drive it (AVRCP)
+- **Sleep mode**: after 10 s of silence both panels collapse with a CRT-style animation; they wake when audio returns
+- **"Matrix rain" transition** between visualizations, and **power off** by holding PLAY
 
 ---
 
 ## Visualization Modes
 
+### SSD1309 (128×64 monochrome)
+
 | Mode | Description |
 |---|---|
-| **VU Meter** | Analog-style needle with logarithmic dB scale (−20 to +3 dB) |
+| **VU Meter** | Analog-style needle on a dB scale (−20 to +3 dB) |
 | **Spectrum** | 7-band filled bars with peak markers and frequency labels (63 Hz → 16 kHz) |
 | **Empty Spectrum** | Same 7 bands, outline-only style |
 | **Waveform** | Time-domain oscilloscope trace |
-| **Track Info** | Scrolling title, bitrate/format, elapsed/total time, progress bar, plus a 64-band mini-spectrum |
-| **Playlist Editor** | Browse albums → tracks; play now or add to queue *(UI labels in French)* |
-
-A short volume overlay is drawn over the current visualization whenever the rotary knob is turned.
+| **Track Info** | Scrolling title, bitrate/format, elapsed/total time, progress bar, mini spectrum, plus a 64-band spectrum on the right panel |
+| **Playlist Editor** | Browse albums → tracks; play now or add to queue |
 
 <img src="img/20260420_102145.jpg" alt="VUmeter" width="300">
 <img src="img/20260420_102159.jpg" alt="Spectrum" width="300">
@@ -41,6 +40,13 @@ A short volume overlay is drawn over the current visualization whenever the rota
 <img src="img/20260420_102212.jpg" alt="Waveform" width="300">
 <img src="img/20260417_084829.jpg" alt="Trackinfo" width="300">
 <img src="img/20260420_102254.jpg" alt="Library" width="300">
+
+
+### SSD1322 (240×128, 16 grey levels)
+
+VU Meter, VU Vintage (arc dial), VU Studio (segmented bargraph), Spectrum (dithered gradient bars), Spectrum LED, Spectrum HD (30 bars from 120 bands), Empty Spectrum, Waveform, Point Cloud (rotating 3D cloud), Terrain (3D spectral landscape), Track Info and the Playlist Editor, plus two hidden modes reached by holding VIZ.
+
+A volume overlay is drawn over the current visualization whenever the rotary knob is turned.
 
 ---
 ## Parts list
@@ -70,242 +76,155 @@ A short volume overlay is drawn over the current visualization whenever the rota
 ## Hardware
 
 ### Displays
-- 2× SSD1309 OLED, 128×64, SPI mode
+- 2× SSD1309 OLED, 128×64, SPI mode, **or**
+- 2× SSD1322 OLED, 240×128, SPI mode (4-wire)
 
 ### GPIO Pinout (BCM numbering)
 
 | Function | Pin | Function | Pin |
 |---|---|---|---|
-| Left display CS | 8 | Right display CS | 7 |
+| Left display CS | 8 (CE0) | Right display CS | 7 (CE1) |
 | Left display DC | 25 | Right display DC | 23 |
 | Left display RST | 24 | Right display RST | 22 |
 | Rotary CLK | 17 | Rotary DT | 5 |
 | Rotary switch | 13 | Viz switch | 27 |
 | Play/Pause button | 26 | Prev button | 6 |
-| Next button | 9 | Power LED | 16 |
+| Next button | 4 | Power LED | 16 |
 
-SPI runs at 10 MHz on the RPi 5 and ~6.25 MHz on the RPi 3B (stable without an extra decoupling cap).
+The Next button used to be on GPIO 9, but that is also SPI0 MISO, which the kernel keeps for the SPI driver: wire it to GPIO 4 (physical pin 7). SPI runs at 6.25 MHz for the SSD1309 and 20 MHz for the SSD1322.
 
 ### Controls
 
 | Input | Action |
 |---|---|
-| Rotary knob | Volume ±2 (normal mode) / scroll list (editor mode) |
+| Rotary knob | Volume ±2 (MPD, or the phone's own volume while it is the active source) / scroll list (editor) |
 | Rotary push | Open Playlist Editor / confirm selection |
-| Viz button | Cycle to next visualization / exit editor |
-| Play button | Play / pause (MPD) |
-| Next / Prev buttons | Skip track (MPD) |
+| Viz button | Next visualization / back out of the editor (SSD1322: hold to visit the hidden modes) |
+| Play button | Play / pause (MPD or phone); **hold 3 s to power the box off** |
+| Next / Prev buttons | Skip track (MPD or phone) |
 
 ---
 
-## Dependencies
+## Installation (Debian package)
 
-Common to both targets:
+`packaging/build-deb.sh` compiles the visualizer and packs it with the whole audio stack configuration into `rav-audio_<version>_arm64.deb` (Debian 13 / Raspberry Pi OS trixie, arm64):
 
-```
-g++  pkg-config
-libdbus-1-dev         # Bluetooth via BlueZ D-Bus
-libpipewire-0.3-dev   # PipeWire capture (output monitor)
-libasound2-dev        # ALSA capture fallback
-libfftw3-dev          # FFT (single-precision)
-libfreetype-dev       # Text rendering
-libmpdclient-dev      # MPD client
+```bash
+sudo apt install cargo rustc libclang-dev libpipewire-0.3-dev libfreetype-dev pkg-config
+packaging/build-deb.sh 2.0.0
+sudo apt install ./packaging/rav-audio_2.0.0_arm64.deb   # pulls in all runtime dependencies
 ```
 
-Plus **one** of:
+The package:
+- runs MPD and Bluetooth A2DP through a PipeWire instance owned by user `mpd`;
+- installs the visualizer as `audio-visualizer.service`, running as user `mpd` with the `gpio` and `spi` groups (no root);
+- works with a HifiBerry (or any I2S DAC) or the onboard headphone jack.
 
-- `liblgpio-dev` (Raspberry Pi 5)
-- [`bcm2835`](https://www.airspayce.com/mikem/bcm2835/) library (Raspberry Pi 3B — install from source)
+Then:
+- choose the panel type with `display = ssd1309` or `ssd1322` in `/etc/rav-audio/visualizer.conf`;
+- set your `music_directory` in `/etc/rav-audio/mpd.conf`;
+- make sure `config.txt` has `dtparam=spi=on` and an audio output (`dtoverlay=hifiberry-…` or `dtparam=audio=on`).
+
+The SSD1322 layouts use the FreePixel font, which is not shipped: copy `FreePixel.ttf` to `/usr/local/share/rav-audio/`, otherwise DejaVu Sans is used. The SSD1309 font (`trixel-square.ttf`) is included. See `packaging/root/usr/share/doc/rav-audio/README` for exactly what the package sets up.
 
 ---
 
-## Building
-
-### Raspberry Pi 5 (lgpio backend)
+## Building and running from source
 
 ```bash
-sudo apt install g++ pkg-config libdbus-1-dev libasound2-dev libpipewire-0.3-dev \
-                 libfftw3-dev libfreetype-dev libmpdclient-dev liblgpio-dev
-
-g++ -o visualizer rav_unified.cpp \
-    -O3 -march=native -std=c++23 \
-    -I/usr/include/freetype2 \
-    $(pkg-config --cflags --libs dbus-1 libpipewire-0.3) \
-    -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -pie -Wl,-z,relro,-z,now \
-    -llgpio -lpthread -lasound -lfftw3f -lm -lfreetype -lmpdclient
+cd rust
+cargo build --release          # on a Raspberry Pi 3 (1 GB): cargo build --release -j 1
 ```
 
-### Raspberry Pi 3B (bcm2835 backend)
+Debian 13's Rust (1.85) is enough; `.cargo/config.toml` makes cargo pick dependency versions that support it. On a Pi 3 the first build takes about 30 minutes, and the parallel LTO link runs out of memory without `-j 1`.
 
 ```bash
-sudo apt install g++ pkg-config libdbus-1-dev libasound2-dev libpipewire-0.3-dev \
-                 libfftw3-dev libfreetype-dev libmpdclient-dev
-# Install bcm2835 from https://www.airspayce.com/mikem/bcm2835/
-
-g++ -o visualizer rav_unified.cpp \
-    -O3 -march=native -std=c++17 -DUSE_BCM2835 \
-    -I/usr/include/freetype2 \
-    $(pkg-config --cflags --libs dbus-1 libpipewire-0.3) \
-    -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -pie -Wl,-z,relro,-z,now \
-    -lbcm2835 -lpthread -lasound -lfftw3f -lm -lfreetype -lmpdclient
+sudo systemctl stop audio-visualizer
+cd /usr/share/rav-audio      # the fonts are looked up in the working directory
+sudo env PIPEWIRE_RUNTIME_DIR=/run/user/$(id -u mpd) RAV_DISPLAY=ssd1309 /path/to/rust/target/release/rav-visualizer
 ```
 
-The only difference is the `-DUSE_BCM2835` flag and the GPIO library. Everything else — the visualizations, MPD client, Bluetooth monitor, audio pipeline — is shared.
+`RAV_DISPLAY` overrides the config file. `SIGINT` / `SIGTERM` shut down cleanly: threads joined, panels cleared and put to sleep.
 
-### Debian package (Raspberry Pi 3B, recommended)
-
-`packaging/build-deb.sh` compiles the bcm2835 build and packs it with the whole audio stack configuration into `rav-audio_<version>_arm64.deb`:
-
-```bash
-packaging/build-deb.sh 1.0.1
-sudo apt install ./packaging/rav-audio_1.0.1_arm64.deb   # pulls in all runtime dependencies
-```
-
-The package installs the visualizer as `audio-visualizer.service`, runs MPD and Bluetooth A2DP through a PipeWire instance owned by user `mpd`, and works with a HifiBerry (or any I2S DAC) or the onboard headphone jack. See `packaging/root/usr/share/doc/rav-audio/README` for exactly what it sets up; set your `music_directory` in `/etc/rav-audio/mpd.conf`. `config.txt` needs `dtparam=spi=on` and an audio output (`dtoverlay=hifiberry-…` or `dtparam=audio=on`).
-
----
-
-## Runtime Setup
-
-### 1. Audio capture
-
-The visualizer first connects to **PipeWire** and passively captures the monitor of the default output, so it shows exactly what is played (MPD, Bluetooth, anything else) and still lets the output suspend when idle. When the PipeWire daemon runs as another user (the `rav-audio` package runs it as `mpd`), point the visualizer at it with `PIPEWIRE_RUNTIME_DIR=/run/user/<uid>`.
-
-Without PipeWire it falls back to an ALSA capture device named `rav` (then `hw:Loopback,1`), fed through the kernel `snd-aloop` module:
-
-```bash
-sudo modprobe snd-aloop
-# and make permanent in /etc/modules
-```
-
-Route your player (MPD, BT, etc.) to the loopback **playback** side; the visualizer reads the matching **capture** side. A named PCM called `rav` in `~/.asoundrc` or `/etc/asound.conf` pointing at the loopback capture device is the cleanest setup.
-
-ALSA audio is read as 44.1 kHz, 16-bit, stereo, 2048-frame periods. Avoid this path with a `multi` playback device and `snd-aloop` `timer_source` on recent kernels (6.18.50): the capture stalls and playback drops out.
-
-### 2. MPD
-
-MPD is expected on `localhost:6600` (hard-coded default in `MPDClient`). It connects in the background and will keep retrying until MPD is available, so boot order doesn't matter.
-
-### 3. Fonts
-
-At startup the program tries, in order:
-
-1. `trixel-square.ttf` in the working directory
-2. `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf`
-
-Drop a `trixel-square.ttf` next to the binary for the intended pixel-font look, or rely on DejaVu as a fallback.
-
-### 4. Bluetooth (optional)
-
-If BlueZ is running, the visualizer subscribes to `PropertiesChanged` on `org.bluez.MediaPlayer1` / `MediaTransport1`. When a phone connects and starts A2DP playback, MPD is auto-paused and the displays switch to showing Bluetooth track metadata. While a phone is connected, PLAY / FW / RW send AVRCP Play/Pause, Next and Previous to it instead of MPD. The A2DP sink itself is provided by PipeWire/WirePlumber (`bluetooth_a2dp_setup.txt` describes the older bluez-alsa setup).
+**Offline render check.** `cargo test --release render -- --nocapture` drives every visualization of both panel types with synthetic audio and writes them as PNG files to `rust/target/render/`, as the panels would show them. No hardware is needed.
 
 ---
 
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│                      VisualizerApp                         │
-│                                                            │
-│   ┌──────────────┐  ┌───────────────┐  ┌──────────────┐    │
-│   │ AudioProcessor│  │   MPDClient   │  │  Bluetooth   │    │
-│   │  (PipeWire + │  │   (idle loop  │  │   Monitor    │    │
-│   │  3× FFTW)    │  │   thread)     │  │  (D-Bus thr) │    │
-│   └──────┬───────┘  └──────┬────────┘  └──────┬───────┘    │
-│          │                 │                  │            │
-│          ▼                 ▼                  ▼            │
-│   ┌────────────────────────────────────────────────────┐   │
-│   │               Visualization (×6)                   │   │
-│   │      VU / Spectrum / Waveform / Track / Editor     │   │
-│   └─────────────────────┬──────────────────────────────┘   │
-│                         ▼                                  │
-│   ┌─────────────────┐       ┌─────────────────┐            │
-│   │  Display LEFT   │       │  Display RIGHT  │            │
-│   └────────┬────────┘       └────────┬────────┘            │
-│            ▼                         ▼                     │
-│   ┌────────────────────────────────────────────┐           │
-│   │       HardwareLayer (abstract)             │           │
-│   │   ├── LGpioBackend   (RPi 5, interrupts)   │           │
-│   │   └── BCM2835Backend (RPi 3B, polling)     │           │
-│   └────────────────────────────────────────────┘           │
-└────────────────────────────────────────────────────────────┘
+            PipeWire (sink monitor)    MPD (TCP)     BlueZ (D-Bus)
+                     │                     │               │
+              capture thread          mpd thread      bt threads
+                     │                     │               │
+                     ▼                     ▼               ▼
+            audio ring + FFTs     ─────▶ FrameSnapshot ◀─────
+                                          │  (one per frame)
+                                          ▼
+          profile ──▶ visualizations (SSD1309 or SSD1322 family)
+                                          │
+                                          ▼
+                       Canvas (grey 0-15) ×2 ──▶ panel driver ──▶ spidev
+                                                 (SSD1309: 1-bit pages,
+                                                  SSD1322: 4-bit, writer thread)
+          GPIO (gpiocdev): buttons, rotary encoder (edge events), LED
 ```
 
 ### Threads
 
 | Thread | Role |
 |---|---|
-| Main | Rendering loop (~60 FPS), input polling, sleep/wake state machine |
-| Audio | PipeWire stream callback (or blocking ALSA reads) → circular buffer |
-| MPD | `mpd_send_idle` loop + periodic bitrate refresh |
-| Bluetooth | D-Bus message dispatch |
-| Rotary poll (RPi 3B only) | 1 kHz GPIO polling (RPi 5 uses `lgpio` alerts/IRQ instead) |
-| Editor load | Async album/track fetch from MPD, so the UI never blocks |
+| Main | Rendering loop (~60 FPS), controls, sleep/wake, transitions |
+| PipeWire | Stream callback → ring buffer; measures the DAC delay; reconnects if PipeWire restarts |
+| MPD | `idle player` loop + 1 s status refresh |
+| Bluetooth | D-Bus signals (PropertiesChanged, InterfacesRemoved) + AVRCP command worker |
+| Encoder | Kernel edge events for the rotary encoder and its button |
+| SPI writer (SSD1322) | Sends frame N while frame N+1 is rendered |
+| Editor load | Async album/track queries, so the UI never blocks |
 
 ### Audio pipeline
 
-1. PipeWire delivers the output monitor in ~1024-frame quanta at 44.1 kHz (ALSA fallback: 2048-frame periods).
-2. Samples land in a 16384-frame circular buffer, read through a virtual head that advances at the sample rate just behind the newest sample (half a delivery + 15 ms), so the display moves smoothly between deliveries.
-3. Three FFTW plans run on Hann-windowed slices ending at the head:
-   - **Bass** (4096 pts) for the low bands — fine frequency resolution
-   - **Mid** (2048 pts) for mid-range bands
-   - **Treble** (512 pts) for high bands — fast response
-4. Each output bin is energy-summed into a freq band, multiplied by a per-band correction curve, then smoothed with an integral filter + gravity decay before being clamped to 0–255 for display.
-
-This tri-resolution approach gives low-latency treble without sacrificing bass precision — a trick borrowed from projects like `cava`.
+1. PipeWire delivers the output's monitor (passive stream, F32 stereo at 44.1 kHz).
+2. Samples land in a ring buffer. The monitor runs ahead of the speakers by the DAC's buffer, measured live from `/proc/asound`, so the analysis windows can be centred on the sample that will be audible when the frame lights up.
+3. Three FFTs per channel pair (left + right packed in one complex FFT): bass (4096 points on the SSD1309, 8192 on the SSD1322), mid (2048) and treble (512).
+4. Each band sums its bins, applies a per-band correction curve, then an integral filter on the way up and a gravity decay on the way down, before being clamped to 0–255.
 
 ### Sleep mode
 
-A silence-detector watches peak amplitude. After 10 s below threshold the app runs a CRT-collapse animation on both screens (vertical pinch → horizontal line → blank), puts the SSD1309s into sleep command `0xAE`, and turns off the power LED. Any audio above threshold (or any button press) reverses the animation and resumes rendering.
+After 10 s below the silence threshold both panels play a CRT-collapse animation (vertical pinch → horizontal line → dot), go to sleep (`0xAE`) and the power LED turns off. Audio, or any button press, reverses it.
 
 ---
 
 ## Project Layout
 
-A single translation unit, roughly organized as:
-
 ```
-rav_unified.cpp
-├── Config             — pin map, SPI, screen constants
-├── HardwareLayer      — abstract class + LGpio / BCM2835 backends
-├── MPDClient          — connection, metadata, control, library queries
-├── BluetoothMonitor   — BlueZ D-Bus listener
-├── FontManager        — FreeType wrapper, UTF-8 decoder
-├── Display            — SSD1309 driver + framebuffer primitives
-├── AudioProcessor     — PipeWire/ALSA capture + 3× FFTW analysis
-├── TextScroller       — ping-pong marquee
-├── Visualization      — base class
-│   ├── VUMeterViz
-│   ├── SpectrumViz / EmptySpectrumViz
-│   ├── WaveformViz
-│   ├── TrackInfoViz
-│   └── PlaylistEditorViz
-├── RotaryEncoder      — interrupt-driven (lgpio) or polled (bcm2835)
-└── VisualizerApp      — wiring, main loop, CRT animation, sleep logic
+rust/src
+├── main.rs, app.rs   — startup, controls, main loop, CRT animation, sleep, power off
+├── profile.rs        — the two panel profiles (geometry, pins, fonts, FFT, features...)
+├── display/          — grey-level Canvas + SSD1309 and SSD1322 drivers
+├── viz/              — Viz trait, playlist editor (shared, one layout per panel)
+│   ├── ssd1309/      — the 128×64 visualizations
+│   └── ssd1322/      — the 240×128 visualizations
+├── audio.rs, bands.rs — PipeWire capture and FFT analysis, band tables
+├── mpd.rs            — minimal MPD client
+├── bluetooth.rs      — BlueZ over D-Bus (zbus): metadata, AVRCP, volume
+├── font.rs, ui.rs    — FreeType glyph cache, scrolling titles, dithering
+├── transition.rs     — "Matrix rain" between visualizations
+├── hw.rs, rotary.rs  — gpiocdev / spidev, encoder decoding
+└── render_test.rs    — offline PNG render check
+packaging/            — Debian package (build-deb.sh, files, maintainer scripts)
 ```
 
----
-
-## Running
-
-```bash
-# Usually needs root for GPIO/SPI access (or appropriate udev rules / groups)
-sudo ./visualizer
-# or, with the Debian package installed
-sudo systemctl status audio-visualizer
-```
-
-`SIGINT` / `SIGTERM` triggers a clean shutdown: threads are joined, displays cleared and put to sleep, GPIO released.
+`rav_unified.cpp` is the original C++ implementation (SSD1309 only; bcm2835 or lgpio backends, build commands in its header), kept for reference. `bluetooth_a2dp_setup.txt` describes the older bluez-alsa Bluetooth setup.
 
 ---
 
 ## Notes & Tweaks
 
-- **Frame rate** is capped at ~60 FPS (16 ms frame time) in `VisualizerApp::run()`.
-- **Auto-cycle interval** is 30 s idle then cycles every `CYCLE_INTERVAL` frames (`= 36000`, ~10 min at 60 FPS).
-- **Sensitivity / noise reduction** can be adjusted via `AudioProcessor::setSensitivity(10–300)` and `setNoiseReduction(0–100)`.
-- **MPD host/port** are hard-coded in `MPDClient`'s constructor (`localhost:6600`); change there if needed.
-- **GPIO chip number** defaults to `4` (RPi 5) with a fallback to `0` (older Pis running lgpio).
+- **Frame rate** is ~60 FPS (16 ms frame time); unchanged frames are not sent to the panels.
+- **Auto-cycle**: after 30 s without a manual change, the next visualization comes up every 10 minutes (the editor and hidden modes are skipped).
+- **MPD host/port** are `localhost:6600` (`App::new`).
+- **Panel parameters** (pins, SPI speed, fonts, FFT size, enabled features) live in `rust/src/profile.rs`.
 
 ## Inspirations
 - CAVA: https://github.com/karlstav/cava

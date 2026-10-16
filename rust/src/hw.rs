@@ -46,9 +46,9 @@ impl OutputLine {
 }
 
 /// The four front-panel push buttons (pull-up, pressed = low). Each line is
-/// requested on its own, so one the kernel keeps (GPIO 9 is SPI0 MISO
-/// unless config.txt frees it with `dtoverlay=spi0-2cs,no_miso`) only
-/// disables that button instead of the whole program.
+/// requested on its own, so a pin the kernel keeps for something else
+/// (e.g. GPIO 9, SPI0 MISO) only disables that button instead of the whole
+/// program.
 pub struct Buttons {
     lines: Vec<(u32, Request)>,
     pins: [u32; 4], // viz, play, fw, rw

@@ -3,13 +3,21 @@ rav-audio - SalonRPI audio box
 
 Audio path: MPD and Bluetooth A2DP -> PipeWire (user mpd, lingering
 user manager) -> default output. The visualizer (audio-visualizer.service,
-/usr/bin/rav-visualizer) captures that output's monitor passively, so the
-output still suspends when nothing plays.
+/usr/bin/rav-visualizer, runs as user mpd with the gpio and spi groups)
+captures that output's monitor passively, so the output still suspends
+when nothing plays.
+
+Panels: `display = ssd1309` (2x 128x64 mono) or `ssd1322` (2x 240x128
+greyscale) in /etc/rav-audio/visualizer.conf, then restart the service.
+The SSD1322 font, FreePixel.ttf, is not shipped: copy it to
+/usr/local/share/rav-audio/ (DejaVu Sans is used otherwise).
+Holding PLAY 3 s powers the box off (polkit rule 50-rav-audio.rules).
 
 Default output (WirePlumber priorities): an I2S DAC such as a HifiBerry
 when its overlay is enabled, else the onboard headphone jack, then HDMI.
 
 Shipped (conffiles, kept across upgrades):
+  /etc/rav-audio/visualizer.conf               panel type
   /etc/rav-audio/mpd.conf                      MPD config (MPDCONF), local
                                                additions in mpd_local.conf
   /etc/pipewire/pipewire.conf.d/10-rav-audio.conf
