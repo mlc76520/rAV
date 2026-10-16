@@ -95,7 +95,7 @@ Garder le style et la densité de commentaires de `rav_unified.cpp`.
 - **État au 2026-10-16** :
   - le paquet installe encore le C++ ;
   - avant la fusion, la version SSD1309 seule avait été testée sur le matériel ;
-  - la version fusionnée passe `cargo check` et le test de rendu, mais **sa compilation release n'a pas encore abouti sur le Pi 3**. Le dernier essai a échoué, probablement par manque de mémoire à l'édition de liens LTO ; il faut la refaire, avec `-j 1`, et retester sur le matériel.
+  - la version fusionnée compile, en 10 min 45 s sur le Pi 3 avec `-j 1`, et passe le test de rendu, mais **elle n'a pas encore été testée sur le matériel**.
 - **Choix du profil, au démarrage** : la variable `RAV_DISPLAY`, sinon `display = ssd1309|ssd1322` dans `/etc/rav-audio/visualizer.conf`, sinon SSD1309.
 - **Contenu d'un profil** (`src/profile.rs`) : écran, taille, vitesse SPI, broches, police et ses tailles, FFT basse, table de bandes, sens de la molette, overlay de volume, liste des visualisations et fonctions activées.
   - SSD1309 : FW en GPIO 9, FFT de 4096 et 64 bandes, police trixel en 8/10/14 px, transition et extinction activées, sans visualisations cachées.
@@ -113,8 +113,9 @@ Garder le style et la densité de commentaires de `rav_unified.cpp`.
   - rustfft remplace FFTW ;
   - si le téléphone est la source active, la molette règle son volume ;
   - s'y ajoutent la transition Matrix et l'extinction par appui long sur PLAY.
-- **Compilation** : `cd rust && cargo build --release -j 2`, avec le Rust 1.85 de Debian, plus `libclang-dev`.
-  - Comptez environ 28 min la première fois sur un Pi 3, puis 7 à 10 min. Limiter à `-j 2`, sinon la mémoire ne suffit pas.
+- **Compilation** : `cd rust && cargo build --release`, avec le Rust 1.85 de Debian, plus `libclang-dev`.
+  - **Sur un Pi 3 (1 Go), utiliser `-j 1`** : avec `-j 2`, le noyau tue rustc par manque de mémoire pendant l'édition de liens LTO.
+  - Comptez environ 30 min la première fois, puis environ 11 min.
   - `.cargo/config.toml` choisit des dépendances compatibles avec Rust 1.85, par exemple zbus 5.13. Ne pas exiger de versions plus récentes dans `Cargo.toml`.
 - **Test de rendu sans matériel** : `cargo test --release render -- --nocapture`. Il écrit chaque visualisation des deux profils en PNG dans `rust/target/render/`, avec un seuil appliqué pour le SSD1309. C'est le seul moyen de vérifier le SSD1322 sur ce Pi.
 - **GPIO 9 (bouton FW, SSD1309)** : le noyau le réserve comme MISO de SPI0, et le bouton est alors désactivé avec un avertissement. Pour le libérer, remplacer `dtparam=spi=on` par `dtoverlay=spi0-2cs,no_miso` dans `config.txt`.
