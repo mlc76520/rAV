@@ -1,0 +1,4 @@
+# Stay buildable with the Debian 13 toolchain (rustc 1.85): pick the newest
+# dependency versions that support it
+[resolver]
+incompatible-rust-versions = "fallback"
