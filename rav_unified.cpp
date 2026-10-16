@@ -675,6 +675,7 @@ class BluetoothMonitor {
 
         std::atomic<bool> bt_connected{false};
         std::atomic<bool> bt_playing{false};
+        std::string transport_path; // monitor thread only
 
         std::string bt_title, bt_artist, bt_album;
         uint32_t bt_duration{0}, bt_position{0};
@@ -790,8 +791,12 @@ class BluetoothMonitor {
                                 parseMediaPlayer(msg);
                             else if (strcmp(interface, "org.bluez.MediaTransport1") == 0)
                                 parseTransport(msg);
+                            else if (strcmp(interface, "org.bluez.Device1") == 0)
+                                parseDevice(msg);
                         }
                     }
+                } else if (dbus_message_is_signal(msg, "org.freedesktop.DBus.ObjectManager", "InterfacesRemoved")) {
+                    parseInterfacesRemoved(msg);
                 }
                 dbus_message_unref(msg);
             }
@@ -859,7 +864,67 @@ class BluetoothMonitor {
             }
         }
 
+        // A2DP streaming on/off, notifying the app (MPD auto-pause) on change.
+        // Monitor thread only, like transport_path.
+        void setStreaming(bool active) {
+            if (bt_connected.exchange(active) != active && on_connection_change)
+                on_connection_change(active);
+        }
+
+        // On disconnect bluez just deletes the transport (no State change),
+        // so a phone that leaves while streaming must be caught here or the
+        // display would keep its track forever
+        void parseInterfacesRemoved(DBusMessage* msg) {
+            DBusMessageIter args, ifaces;
+            const char* path = nullptr;
+            if (!dbus_message_iter_init(msg, &args) ||
+                dbus_message_iter_get_arg_type(&args) != DBUS_TYPE_OBJECT_PATH) return;
+            dbus_message_iter_get_basic(&args, &path);
+            if (!dbus_message_iter_next(&args) ||
+                dbus_message_iter_get_arg_type(&args) != DBUS_TYPE_ARRAY) return;
+            dbus_message_iter_recurse(&args, &ifaces);
+            for (; dbus_message_iter_get_arg_type(&ifaces) == DBUS_TYPE_STRING;
+                   dbus_message_iter_next(&ifaces)) {
+                const char* name;
+                dbus_message_iter_get_basic(&ifaces, &name);
+                if (strcmp(name, "org.bluez.MediaTransport1") == 0 && transport_path == path) {
+                    transport_path.clear();
+                    setStreaming(false);
+                } else if (strcmp(name, "org.bluez.MediaPlayer1") == 0) {
+                    bt_playing = false;
+                }
+            }
+        }
+
+        // Device Connected=false: the phone is gone, whatever its transport did
+        void parseDevice(DBusMessage* msg) {
+            const char* path = dbus_message_get_path(msg);
+            if (!path || transport_path.rfind(path, 0) != 0) return;
+            DBusMessageIter args, dict, entry, variant;
+            if (!dbus_message_iter_init(msg, &args) || !dbus_message_iter_next(&args) ||
+                dbus_message_iter_get_arg_type(&args) != DBUS_TYPE_ARRAY) return;
+            dbus_message_iter_recurse(&args, &dict);
+            for (; dbus_message_iter_get_arg_type(&dict) == DBUS_TYPE_DICT_ENTRY;
+                   dbus_message_iter_next(&dict)) {
+                const char* key;
+                dbus_message_iter_recurse(&dict, &entry);
+                dbus_message_iter_get_basic(&entry, &key);
+                dbus_message_iter_next(&entry);
+                dbus_message_iter_recurse(&entry, &variant);
+                if (strcmp(key, "Connected") != 0 ||
+                    dbus_message_iter_get_arg_type(&variant) != DBUS_TYPE_BOOLEAN) continue;
+                dbus_bool_t on = TRUE;
+                dbus_message_iter_get_basic(&variant, &on);
+                if (!on) {
+                    transport_path.clear();
+                    bt_playing = false;
+                    setStreaming(false);
+                }
+            }
+        }
+
         void parseTransport(DBusMessage* msg) {
+            if (const char* path = dbus_message_get_path(msg)) transport_path = path;
             DBusMessageIter args, dict, entry, variant;
             if (!dbus_message_iter_init(msg, &args)) return;
             dbus_message_iter_next(&args);
@@ -876,10 +941,7 @@ class BluetoothMonitor {
                 if (strcmp(key, "State") == 0) {
                     const char* state;
                     dbus_message_iter_get_basic(&variant, &state);
-                    bool was_connected = bt_connected;
-                    bt_connected = (strcmp(state, "active") == 0);
-                    if (bt_connected != was_connected && on_connection_change)
-                        on_connection_change(bt_connected);
+                    setStreaming(strcmp(state, "active") == 0);
                 }
                 dbus_message_iter_next(&dict);
             }
@@ -902,6 +964,10 @@ class BluetoothMonitor {
             }
             dbus_bus_add_match(conn,
                 "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'", &err);
+            if (!dbus_error_is_set(&err))
+                dbus_bus_add_match(conn,
+                    "type='signal',sender='org.bluez',interface='org.freedesktop.DBus.ObjectManager',"
+                    "member='InterfacesRemoved'", &err);
             if (dbus_error_is_set(&err)) {
                 printf("D-Bus match error: %s\n", err.message);
                 dbus_error_free(&err); return false;
