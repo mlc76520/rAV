@@ -1,6 +1,7 @@
 # Build outputs
 visualizer
 visualizer.*
+!packaging/root/etc/rav-audio/visualizer.conf
 *.deb
 
 # Local backups

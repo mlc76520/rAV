@@ -13,7 +13,8 @@ Garder le style et la densité de commentaires du code existant.
 - **Chaîne audio** : MPD et Bluetooth A2DP passent par **PipeWire** vers la sortie par défaut. PipeWire tourne en instance unique sous l'utilisateur `mpd`, démarrée au boot par le linger systemd.
 - **Visualiseur** : la version Rust (`rust/`), qui capte *passivement* le monitor de cette sortie via l'API PipeWire native.
 - **Installation** : tout est mis en place par le paquet Debian **`rav-audio`** (`packaging/`), en version 2.x depuis le 2026-10-16.
-- **Testé sur le matériel SSD1309** : affichage, capture, quatre boutons, encodeur, éditeur, transition, overlay et Bluetooth, avec 7 % de CPU et 10 Mo de mémoire. Le SSD1322 n'a été vérifié que par le test de rendu.
+- **Testé sur le matériel SSD1309** (SalonRPI, Pi 3) : affichage, capture, quatre boutons, encodeur, éditeur, transition, overlay et Bluetooth, avec 7 % de CPU et 10 Mo de mémoire.
+- **Testé sur le matériel SSD1322** (BureauRPI, Pi 5, HifiBerry DAC+) le 2026-10-16 : affichage, visualisations, boutons, molette, éditeur et overlay, puis paquet 2.0.3 installé.
 
 ## Fichiers
 
@@ -58,7 +59,7 @@ Garder le style et la densité de commentaires du code existant.
 
 - **Fichiers fournis** :
   - le binaire `/usr/bin/rav-visualizer` et l'unité `audio-visualizer.service`, qui tourne **sous l'utilisateur `mpd`** avec `SupplementaryGroups=gpio spi` et `ProtectHome=read-only` ;
-  - `/etc/rav-audio/visualizer.conf` (type d'écran) et `/etc/rav-audio/mpd.conf`, ce dernier choisi via `MPDCONF` dans un drop-in de `mpd.service` (`/etc/mpd.conf` n'est pas utilisé) ;
+  - `/etc/rav-audio/visualizer.conf` (type d'écran) et `/etc/rav-audio/mpd.conf`, ce dernier choisi via `MPDCONF` dans un drop-in de `mpd.service` (`/etc/mpd.conf` n'est pas utilisé). MPD y écoute sur toutes les interfaces (`bind_to_address "::"`) : les deux boîtiers sont pilotés par des clients MPD du réseau, ne pas revenir à `localhost` ;
   - `/usr/share/polkit-1/rules.d/50-rav-audio.rules` : il autorise `mpd` à éteindre la machine (appui long sur PLAY), et rien d'autre ;
   - les unités `bt-agent` et `bt-discoverable` ;
   - la police `trixel-square.ttf`. **FreePixel n'est pas fournie**, faute de licence vérifiée : sur le boîtier SSD1322, la copier à la main dans `/usr/local/share/rav-audio/`, sinon c'est DejaVu qui s'affiche.
@@ -68,7 +69,7 @@ Garder le style et la densité de commentaires du code existant.
     - bluez sans surveillance de siège (seat-monitoring) ;
     - rôle `a2dp_sink` ;
     - volume de sortie par défaut à 1.0 ;
-    - priorités : DAC I2S (`soc_sound`), puis jack intégré (`bcm2835_audio`), puis HDMI ;
+    - priorités : DAC I2S (`platform-soc_sound` sur Pi 3, `platform-soc_107c000000_sound` sur Pi 5), puis jack intégré (`bcm2835_audio`), puis HDMI ;
     - snd-aloop désactivé.
 - **Drop-ins `ConditionUser=mpd`** sur `pipewire.service`, `pipewire.socket` et `wireplumber.service`, dans `/usr/lib/systemd/user`.
 - **Généré par `postinst`**, car cela dépend de l'UID de `mpd`, et retiré par `postrm` :
@@ -120,12 +121,14 @@ Garder le style et la densité de commentaires du code existant.
 - **Avant le 2026-10-16** : le paquet 1.x installait `rav_unified.cpp`, qui tournait en root à cause de `/dev/mem` (bcm2835) et gardait un cache FFTW dans `StateDirectory`.
 - **2026-10-16** :
   - fusion des deux portages Rust en un seul programme à profils ;
-  - passage du paquet à la version Rust : 2.0.0, puis 2.0.1 (`ProtectHome`), puis 2.0.2 (FW en GPIO 4).
+  - passage du paquet à la version Rust : 2.0.0, puis 2.0.1 (`ProtectHome`), puis 2.0.2 (FW en GPIO 4) ;
+  - 2.0.3 : `visualizer.conf` enfin suivi par git (il était masqué par `visualizer.*` dans `.gitignore`), règle de priorité I2S valable sur Pi 5, MPD sur toutes les interfaces. Installé sur le BureauRPI, à la place de l'installation manuelle (`rav.service`, sauvegardée dans `~/rav/backup_pre_rav-audio_2026-10-16/`).
 
 ## Non vérifié ou à faire
 
 - La désinstallation du paquet n'a jamais été testée.
-- Le profil SSD1322 n'a pas été testé sur le matériel depuis la fusion, ni la version Rust sur Pi 5.
+- Le SalonRPI est encore en 2.0.2 (MPD limité à `localhost`) : y installer la 2.0.3.
+- **BureauRPI** : `/etc/wireplumber/wireplumber.conf.d/60-local-headroom.conf` (hors paquet) garde `api.alsa.headroom = 8192`, environ 186 ms d'avance pour la synchro, en attendant de nouvelles mesures. Décider ensuite de l'intégrer au paquet ou de le retirer.
 - Le nom du nœud du jack intégré, `alsa_output.platform-bcm2835_audio.*`, n'a pas été vérifié sur du matériel.
 - L'extinction par appui long sur PLAY n'a pas été essayée en vrai : seule la règle polkit a été vérifiée.
 - `music_directory` dans `/etc/rav-audio/mpd.conf` est propre au SalonRPI : il pointe vers `/media/icarus3/music`.
