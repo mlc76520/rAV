@@ -107,6 +107,77 @@ pub struct TrackInfo {
     pub track_num: String,
 }
 
+/// One line of a folder listing (or of an album/playlist, songs only).
+pub enum Entry {
+    Dir(String),
+    Song(TrackInfo),
+}
+
+/// A group of songs the editor can open, play or queue as a whole.
+#[derive(Clone)]
+pub enum Collection {
+    Album(String),
+    /// Path relative to music_directory; "" is the root.
+    Folder(String),
+    Playlist(String),
+}
+
+impl Collection {
+    /// Command that appends the whole collection to the queue.
+    fn add_cmd(&self) -> String {
+        match self {
+            Collection::Album(a) => format!("findadd album {}", quote(a)),
+            Collection::Folder(p) => format!("add {}", quote(p)),
+            Collection::Playlist(n) => format!("load {}", quote(n)),
+        }
+    }
+
+    fn list_cmd(&self) -> String {
+        match self {
+            Collection::Album(a) => format!("find album {}", quote(a)),
+            Collection::Folder(p) if p.is_empty() => "lsinfo".into(),
+            Collection::Folder(p) => format!("lsinfo {}", quote(p)),
+            Collection::Playlist(n) => format!("listplaylistinfo {}", quote(n)),
+        }
+    }
+}
+
+/// Last component of an MPD path.
+pub fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Songs (file, then their tags) and directories from a listing; anything
+/// else (stored playlists in lsinfo) is skipped.
+fn parse_entries(pairs: Pairs) -> Vec<Entry> {
+    let mut entries = Vec::new();
+    let mut in_song = false; // tags that follow belong to the last song
+    for (k, v) in pairs {
+        match k.as_str() {
+            "directory" => {
+                entries.push(Entry::Dir(v));
+                in_song = false;
+            }
+            "playlist" => in_song = false,
+            "file" => {
+                let title = basename(&v).to_string();
+                entries.push(Entry::Song(TrackInfo { title, file: v, track_num: String::new() }));
+                in_song = true;
+            }
+            "Title" | "Track" if in_song => {
+                let Some(Entry::Song(t)) = entries.last_mut() else { continue };
+                if k == "Title" {
+                    t.title = v;
+                } else {
+                    t.track_num = v.split('/').next().unwrap_or("").to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    entries
+}
+
 pub struct MpdClient {
     host: String,
     port: u16,
@@ -327,30 +398,47 @@ impl MpdClient {
         albums
     }
 
-    pub fn album_tracks(&self, album: &str) -> Vec<TrackInfo> {
-        let pairs = self
-            .with_conn(Duration::from_secs(2), |c| c.run(&format!("find album {}", quote(album))))
-            .unwrap_or_default();
-        let mut tracks: Vec<TrackInfo> = Vec::new();
-        for (k, v) in pairs {
-            match k.as_str() {
-                "file" => tracks.push(TrackInfo { title: v.clone(), file: v, track_num: String::new() }),
-                "Title" => if let Some(t) = tracks.last_mut() { t.title = v },
-                "Track" => if let Some(t) = tracks.last_mut() {
-                    t.track_num = v.split('/').next().unwrap_or("").to_string();
-                },
-                _ => {}
-            }
-        }
-        tracks
+    /// What `c` contains: songs, plus sub-directories for a folder.
+    pub fn contents(&self, c: &Collection) -> Vec<Entry> {
+        parse_entries(self.with_conn(Duration::from_secs(2), |conn| conn.run(&c.list_cmd())).unwrap_or_default())
     }
 
-    pub fn add_album(&self, album: &str) {
-        self.quick(&[format!("findadd album {}", quote(album))]);
+    /// The queue, and the position of the current song.
+    pub fn queue(&self) -> (Vec<TrackInfo>, Option<usize>) {
+        self.with_conn(Duration::from_secs(2), |c| {
+            let songs = parse_entries(c.run("playlistinfo")?)
+                .into_iter()
+                .filter_map(|e| if let Entry::Song(t) = e { Some(t) } else { None })
+                .collect();
+            let st = c.run("status")?;
+            Ok((songs, get(&st, "song").and_then(|v| v.parse().ok())))
+        })
+        .unwrap_or_default()
     }
 
-    pub fn clear_and_play_album(&self, album: &str) {
-        self.quick(&["clear".into(), format!("findadd album {}", quote(album)), "play".into()]);
+    pub fn playlists(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .with_conn(Duration::from_secs(2), |c| c.run("listplaylists"))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(k, _)| k == "playlist")
+            .map(|(_, v)| v)
+            .collect();
+        names.sort();
+        names
+    }
+
+    pub fn add(&self, c: &Collection) {
+        self.quick(&[c.add_cmd()]);
+    }
+
+    pub fn clear_and_play(&self, c: &Collection) {
+        self.quick(&["clear".into(), c.add_cmd(), "play".into()]);
+    }
+
+    /// Plays the queue from position `pos`.
+    pub fn play_pos(&self, pos: usize) {
+        self.quick(&[format!("play {pos}")]);
     }
 
     pub fn add_track(&self, file: &str) {

@@ -1,13 +1,15 @@
-//! Playlist editor: browse albums (left panel), open one to play it, queue
-//! it or queue single tracks; the right panel shows what is playing over a
-//! mirrored spectrum. Library queries run on a worker thread and hand their
-//! result back through a channel, polled each frame. The logic is shared;
-//! each panel family supplies its Layout.
+//! Playlist editor: a menu (left panel) opens the queue, the albums, the
+//! music folders or the stored playlists; an album, folder or playlist can be
+//! played, queued, or have single tracks queued, and a queued song played.
+//! The right panel shows what is playing over a mirrored spectrum. Library
+//! queries run on a worker thread and hand their result back through a
+//! channel, polled each frame. The logic is shared; each panel family
+//! supplies its Layout.
 
 use super::{Frame, Tier, Viz};
 use crate::display::Canvas;
 use crate::font::{Fonts, Size};
-use crate::mpd::{MpdClient, TrackInfo};
+use crate::mpd::{self, Collection, Entry, MpdClient, TrackInfo};
 use crate::snapshot::FrameSnapshot;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
@@ -28,7 +30,7 @@ pub struct Layout {
     pub scrollbar_w: i32,
     pub scrollbar_min: i32,
     pub loading_at: (i32, i32),
-    pub empty_at: (i32, i32), // "No album"
+    pub empty_at: (i32, i32), // "Empty"
     pub feedback_box: (i32, i32, i32, i32),
     pub feedback_inset: i32, // of the inner frame
     pub feedback_baseline: i32,
@@ -41,16 +43,106 @@ pub struct Layout {
     pub help_y: i32,
 }
 
-#[derive(PartialEq, Clone, Copy)]
-enum State {
+/// A list the editor can show.
+#[derive(Clone)]
+enum Source {
+    Queue,
     Albums,
-    Tracks,
-    Feedback,
+    Playlists,
+    Contents(Collection),
 }
 
-enum Loaded {
-    Albums(Vec<String>),
-    Tracks(Vec<TrackInfo>),
+impl Source {
+    fn title(&self) -> String {
+        match self {
+            Source::Queue => "QUEUE".into(),
+            Source::Albums => "ALBUMS".into(),
+            Source::Playlists => "PLAYLISTS".into(),
+            Source::Contents(Collection::Folder(p)) if p.is_empty() => "FOLDERS".into(),
+            Source::Contents(Collection::Folder(p)) => mpd::basename(p).into(),
+            Source::Contents(Collection::Album(n) | Collection::Playlist(n)) => n.clone(),
+        }
+    }
+}
+
+/// What selecting a row does.
+#[derive(Clone)]
+enum Action {
+    Open(Source),
+    Play(Collection),
+    Add(Collection),
+    PlayPos(usize),
+    AddFile(String),
+}
+
+struct Row {
+    label: String,
+    action: Action,
+}
+
+impl Row {
+    fn new(label: impl Into<String>, action: Action) -> Self {
+        Self { label: label.into(), action }
+    }
+}
+
+/// Rows of a list, with the row the cursor starts on.
+struct Listing {
+    rows: Vec<Row>,
+    cursor: usize,
+}
+
+fn track_label(t: &TrackInfo) -> String {
+    if t.track_num.is_empty() { t.title.clone() } else { format!("{}. {}", t.track_num, t.title) }
+}
+
+/// Runs on the worker thread.
+fn list(mpd: &MpdClient, source: &Source) -> Listing {
+    let mut cursor = 0;
+    let rows = match source {
+        Source::Queue => {
+            let (songs, current) = mpd.queue();
+            cursor = current.unwrap_or(0);
+            let mark = |i| if Some(i) == current { "> " } else { "" };
+            songs.iter().enumerate().map(|(i, t)| Row::new(format!("{}{}", mark(i), t.title), Action::PlayPos(i))).collect()
+        }
+        Source::Albums => mpd.albums().into_iter()
+            .map(|a| Row::new(a.clone(), Action::Open(Source::Contents(Collection::Album(a)))))
+            .collect(),
+        Source::Playlists => mpd.playlists().into_iter()
+            .map(|n| Row::new(n.clone(), Action::Open(Source::Contents(Collection::Playlist(n)))))
+            .collect(),
+        Source::Contents(c) => {
+            // The whole library is not offered as one block
+            let mut rows = match c {
+                Collection::Folder(p) if p.is_empty() => Vec::new(),
+                _ => {
+                    let noun = match c {
+                        Collection::Album(_) => "album",
+                        Collection::Folder(_) => "folder",
+                        Collection::Playlist(_) => "playlist",
+                    };
+                    vec![
+                        Row::new(format!("> Play {noun}"), Action::Play(c.clone())),
+                        Row::new(format!("+ Add {noun}"), Action::Add(c.clone())),
+                    ]
+                }
+            };
+            rows.extend(mpd.contents(c).into_iter().map(|e| match e {
+                Entry::Dir(d) => Row::new(format!("{}/", mpd::basename(&d)), Action::Open(Source::Contents(Collection::Folder(d)))),
+                Entry::Song(t) => Row::new(track_label(&t), Action::AddFile(t.file)),
+            }));
+            rows
+        }
+    };
+    Listing { rows, cursor }
+}
+
+/// One level of the navigation.
+struct Screen {
+    title: String,
+    rows: Vec<Row>,
+    pos: ListPos,
 }
 
 const FEEDBACK_TIME: Duration = Duration::from_millis(1500);
@@ -78,52 +170,48 @@ impl ListPos {
             self.scroll = self.scroll.min(self.cursor);
         }
     }
+
+    /// Cursor on `row`, scrolled so that it is in view.
+    fn at(row: usize, len: usize, visible: usize) -> Self {
+        let cursor = row.min(len.saturating_sub(1));
+        Self { cursor, scroll: cursor.saturating_sub(visible / 2).min(len.saturating_sub(visible)) }
+    }
 }
 
 pub struct PlaylistEditor {
     mpd: Arc<MpdClient>,
     layout: &'static Layout,
-    state: State,
-    /// Where the feedback message returns to.
-    feedback_return: State,
-    albums: Vec<String>,
-    albums_loaded: bool,
-    tracks: Vec<TrackInfo>,
-    loading: Option<Receiver<Loaded>>,
-    album_pos: ListPos,
-    track_pos: ListPos,
-    selected_album: String,
-    feedback: &'static str,
-    feedback_ts: Instant,
+    /// The menu first; the last screen is the one shown.
+    screens: Vec<Screen>,
+    /// Query filling the last screen; dropped when the user backs out of it.
+    loading: Option<Receiver<Listing>>,
+    feedback: Option<(&'static str, Instant)>,
 }
 
 impl PlaylistEditor {
     pub fn new(mpd: Arc<MpdClient>, layout: &'static Layout) -> Self {
-        Self {
-            mpd,
-            layout,
-            state: State::Albums,
-            feedback_return: State::Albums,
-            albums: Vec::new(),
-            albums_loaded: false,
-            tracks: Vec::new(),
-            loading: None,
-            album_pos: ListPos::default(),
-            track_pos: ListPos::default(),
-            selected_album: String::new(),
-            feedback: "",
-            feedback_ts: Instant::now(),
-        }
+        let mut ed = Self { mpd, layout, screens: Vec::new(), loading: None, feedback: None };
+        ed.on_activate();
+        ed
     }
 
-    fn load(&mut self, job: impl FnOnce(&MpdClient) -> Loaded + Send + 'static) {
-        if self.loading.is_some() {
-            return;
-        }
+    fn menu() -> Screen {
+        let rows = vec![
+            Row::new("Queue", Action::Open(Source::Queue)),
+            Row::new("Albums", Action::Open(Source::Albums)),
+            Row::new("Folders", Action::Open(Source::Contents(Collection::Folder(String::new())))),
+            Row::new("Playlists", Action::Open(Source::Playlists)),
+        ];
+        Screen { title: "LIBRARY".into(), rows, pos: ListPos::default() }
+    }
+
+    /// Shows the source's list, filled when its query returns.
+    fn open(&mut self, source: Source) {
+        self.screens.push(Screen { title: source.title(), rows: Vec::new(), pos: ListPos::default() });
         let (tx, rx) = mpsc::channel();
         let mpd = Arc::clone(&self.mpd);
         thread::spawn(move || {
-            let _ = tx.send(job(&mpd));
+            let _ = tx.send(list(&mpd, &source));
         });
         self.loading = Some(rx);
     }
@@ -132,13 +220,10 @@ impl PlaylistEditor {
     fn poll(&mut self) {
         let Some(rx) = &self.loading else { return };
         match rx.try_recv() {
-            Ok(Loaded::Albums(a)) => {
-                self.albums = a;
-                self.albums_loaded = true;
-                self.loading = None;
-            }
-            Ok(Loaded::Tracks(t)) => {
-                self.tracks = t;
+            Ok(listing) => {
+                let screen = self.screens.last_mut().expect("menu screen");
+                screen.pos = ListPos::at(listing.cursor, listing.rows.len(), self.layout.visible_lines);
+                screen.rows = listing.rows;
                 self.loading = None;
             }
             Err(mpsc::TryRecvError::Disconnected) => self.loading = None,
@@ -146,75 +231,74 @@ impl PlaylistEditor {
         }
     }
 
+    /// Back to the menu each time the editor opens.
     pub fn on_activate(&mut self) {
-        if !self.albums_loaded {
-            self.load(|m| Loaded::Albums(m.albums()));
-        }
+        self.screens = vec![Self::menu()];
+        self.loading = None;
+        self.feedback = None;
     }
 
-    /// Shows msg for a moment, then goes back to the list it came from.
+    /// Shows msg for a moment, then goes back to the list.
     fn set_feedback(&mut self, msg: &'static str) {
-        self.feedback = msg;
-        self.feedback_ts = Instant::now();
-        self.feedback_return = self.state;
-        self.state = State::Feedback;
+        self.feedback = Some((msg, Instant::now()));
+    }
+
+    fn run(&mut self, action: Action) {
+        match action {
+            Action::Open(source) => self.open(source),
+            Action::Play(c) => {
+                self.mpd.clear_and_play(&c);
+                self.set_feedback("Play !");
+            }
+            Action::Add(c) => {
+                self.mpd.add(&c);
+                self.set_feedback(match c {
+                    Collection::Album(_) => "Album added !",
+                    Collection::Folder(_) => "Folder added !",
+                    Collection::Playlist(_) => "Playlist added !",
+                });
+            }
+            Action::PlayPos(pos) => {
+                self.mpd.play_pos(pos);
+                self.set_feedback("Play !");
+            }
+            Action::AddFile(file) => {
+                self.mpd.add_track(&file);
+                self.set_feedback("Track added !");
+            }
+        }
     }
 
     /// Returns true when the user backs out of the editor.
     pub fn handle_input(&mut self, up: bool, down: bool, select: bool, back: bool) -> bool {
         self.poll();
-        let loading = self.loading.is_some();
+        if self.feedback.is_some() {
+            if select || back {
+                self.feedback = None;
+            }
+            return false;
+        }
+        if back {
+            if self.screens.len() == 1 {
+                return true;
+            }
+            self.screens.pop();
+            self.loading = None;
+            return false;
+        }
+        if self.loading.is_some() {
+            return false;
+        }
         let visible = self.layout.visible_lines;
-        match self.state {
-            State::Feedback => {
-                if select || back {
-                    self.state = self.feedback_return;
-                }
-                false
-            }
-            State::Albums => {
-                if !loading && !self.albums.is_empty() {
-                    self.album_pos.step(up, down, self.albums.len(), visible);
-                    if select {
-                        self.selected_album = self.albums[self.album_pos.cursor].clone();
-                        self.track_pos = ListPos::default();
-                        self.state = State::Tracks;
-                        let album = self.selected_album.clone();
-                        self.load(move |m| Loaded::Tracks(m.album_tracks(&album)));
-                    }
-                }
-                back
-            }
-            State::Tracks => {
-                if back {
-                    self.state = State::Albums;
-                    return false;
-                }
-                if loading {
-                    return false;
-                }
-                self.track_pos.step(up, down, 2 + self.tracks.len(), visible);
-                if select {
-                    match self.track_pos.cursor {
-                        0 => {
-                            self.mpd.clear_and_play_album(&self.selected_album);
-                            self.set_feedback("Play !");
-                        }
-                        1 => {
-                            self.mpd.add_album(&self.selected_album);
-                            self.set_feedback("Album added !");
-                        }
-                        n => {
-                            if let Some(t) = self.tracks.get(n - 2) {
-                                self.mpd.add_track(&t.file);
-                                self.set_feedback("Track added !");
-                            }
-                        }
-                    }
-                }
-                false
+        let screen = self.screens.last_mut().expect("menu screen");
+        screen.pos.step(up, down, screen.rows.len(), visible);
+        if select {
+            if let Some(row) = screen.rows.get(screen.pos.cursor) {
+                let action = row.action.clone();
+                self.run(action);
             }
         }
+        false
     }
 
     fn row(&self, cv: &mut Canvas, fonts: &Fonts, row: usize, label: &str, selected: bool) {
@@ -253,58 +337,34 @@ impl PlaylistEditor {
     fn render_browser(&mut self, cv: &mut Canvas, fonts: &Fonts) {
         let l = self.layout;
         cv.clear();
-        let loading = self.loading.is_some();
-        let message = |cv: &mut Canvas, (x, y): (i32, i32), text| fonts.draw(cv, x, y, text, l.size, 15);
-        if !self.albums_loaded && loading {
-            message(cv, l.loading_at, "Loading...");
-            return;
-        }
-        match self.state {
-            State::Feedback => {
-                if self.feedback_ts.elapsed() > FEEDBACK_TIME {
-                    self.state = self.feedback_return;
-                }
+        if let Some((msg, ts)) = self.feedback {
+            if ts.elapsed() > FEEDBACK_TIME {
+                self.feedback = None;
+            } else {
                 let (x, y, w, h) = l.feedback_box;
                 cv.rect(x, y, w, h, false, 15);
                 let i = l.feedback_inset;
                 cv.rect(x + i, y + i, w - 2 * i, h - 2 * i, false, 15);
-                fonts.draw_centered(cv, cv.width() / 2, l.feedback_baseline, self.feedback, l.size, 15);
-            }
-            State::Albums => {
-                self.header(cv, fonts, "LIBRARY");
-                if self.albums.is_empty() {
-                    message(cv, l.empty_at, "No album");
-                    return;
-                }
-                let (scroll, cursor) = (self.album_pos.scroll, self.album_pos.cursor);
-                for (i, album) in self.albums.iter().enumerate().skip(scroll).take(l.visible_lines) {
-                    self.row(cv, fonts, i - scroll, album, i == cursor);
-                }
-                self.scrollbar(cv, self.albums.len(), scroll);
-            }
-            State::Tracks => {
-                let header = fonts.truncate(&self.selected_album, l.row_text_w - 2, l.size);
-                self.header(cv, fonts, &header);
-                if loading {
-                    message(cv, l.loading_at, "Loading...");
-                    return;
-                }
-                let total = 2 + self.tracks.len();
-                let (scroll, cursor) = (self.track_pos.scroll, self.track_pos.cursor);
-                for idx in scroll..(scroll + l.visible_lines).min(total) {
-                    let label = match idx {
-                        0 => "> Play album".to_string(),
-                        1 => "+ Add album".to_string(),
-                        n => {
-                            let t = &self.tracks[n - 2];
-                            if t.track_num.is_empty() { t.title.clone() } else { format!("{}. {}", t.track_num, t.title) }
-                        }
-                    };
-                    self.row(cv, fonts, idx - scroll, &label, idx == cursor);
-                }
-                self.scrollbar(cv, total, scroll);
+                fonts.draw_centered(cv, cv.width() / 2, l.feedback_baseline, msg, l.size, 15);
+                return;
             }
         }
+        let screen = self.screens.last().expect("menu screen");
+        self.header(cv, fonts, &fonts.truncate(&screen.title, l.row_text_w - 2, l.size));
+        let message = |cv: &mut Canvas, (x, y): (i32, i32), text| fonts.draw(cv, x, y, text, l.size, 15);
+        if self.loading.is_some() {
+            message(cv, l.loading_at, "Loading...");
+            return;
+        }
+        if screen.rows.is_empty() {
+            message(cv, l.empty_at, "Empty");
+            return;
+        }
+        let (scroll, cursor) = (screen.pos.scroll, screen.pos.cursor);
+        for (i, row) in screen.rows.iter().enumerate().skip(scroll).take(l.visible_lines) {
+            self.row(cv, fonts, i - scroll, &row.label, i == cursor);
+        }
+        self.scrollbar(cv, screen.rows.len(), scroll);
     }
 
     fn render_info(&self, cv: &mut Canvas, fonts: &Fonts, snap: &FrameSnapshot) {
@@ -322,8 +382,15 @@ impl PlaylistEditor {
             cv.rect(x, axis + 1 + l.spectrum_gap, 1, 1 + hr, true, 15);
         }
         cv.line(0, axis + l.spectrum_gap, cv.width() - 1, axis + l.spectrum_gap, 15);
-        let help = if self.state == State::Albums { "SEL:enter BCK:quit" } else { "SEL:add BCK:back" };
-        fonts.draw(cv, 0, l.help_y, help, l.size, 15);
+        let screen = self.screens.last().expect("menu screen");
+        let sel = match screen.rows.get(screen.pos.cursor).map(|r| &r.action) {
+            Some(Action::Open(_)) => "SEL:open ",
+            Some(Action::Play(_) | Action::PlayPos(_)) => "SEL:play ",
+            Some(Action::Add(_) | Action::AddFile(_)) => "SEL:add ",
+            None => "",
+        };
+        let back = if self.screens.len() == 1 { "BCK:quit" } else { "BCK:back" };
+        fonts.draw(cv, 0, l.help_y, &format!("{sel}{back}"), l.size, 15);
     }
 }
 
