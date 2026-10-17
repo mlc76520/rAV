@@ -64,7 +64,7 @@ Garder le style et la densité de commentaires du code existant.
   - les unités `bt-agent` et `bt-discoverable` ;
   - la police `trixel-square.ttf`. **FreePixel n'est pas fournie**, faute de licence vérifiée : sur le boîtier SSD1322, la copier à la main dans `/usr/local/share/rav-audio/`, sinon c'est DejaVu qui s'affiche.
 - **Configuration PipeWire et WirePlumber** :
-  - `10-rav-audio.conf` : graphe à 44100 Hz ;
+  - `10-rav-audio.conf` : graphe à 44100 Hz par défaut, qui suit la fréquence de la source (44,1 à 192 kHz) pour éviter le rééchantillonnage. Le visualiseur demande toujours 44100 Hz, et PipeWire convertit son flux de capture ;
   - `50-rav-audio.conf` :
     - bluez sans surveillance de siège (seat-monitoring) ;
     - rôle `a2dp_sink` ;
@@ -124,10 +124,12 @@ Garder le style et la densité de commentaires du code existant.
   - passage du paquet à la version Rust : 2.0.0, puis 2.0.1 (`ProtectHome`), puis 2.0.2 (FW en GPIO 4) ;
   - 2.0.3 : `visualizer.conf` enfin suivi par git (il était masqué par `visualizer.*` dans `.gitignore`), règle de priorité I2S valable sur Pi 5, MPD sur toutes les interfaces. Installé sur le SalonRPI et sur le BureauRPI ; sur ce dernier, à la place de l'installation manuelle (`rav.service`, sauvegardée dans `~/rav/backup_pre_rav-audio_2026-10-16/`).
 - **2026-10-17** : 2.0.4, menu de l'éditeur (Queue, Albums, Folders, Playlists), essayé sur le BureauRPI.
+- **2026-10-17** : 2.0.5, le graphe PipeWire suit la fréquence de la source au lieu de tout rééchantillonner à 44100 Hz.
 
 ## Non vérifié ou à faire
 
 - La désinstallation du paquet n'a jamais été testée.
+- **SalonRPI** : vérifier que les changements de fréquence entre morceaux passent bien sur la sortie S/PDIF (Digi), sans silence ni clic gênant chez le récepteur. Sinon, revenir à 44100 Hz seul sur ce boîtier par un fichier local.
 - **BureauRPI** : `/etc/wireplumber/wireplumber.conf.d/60-local-headroom.conf` (hors paquet) garde `api.alsa.headroom = 8192`, environ 186 ms d'avance pour la synchro, en attendant de nouvelles mesures. Décider ensuite de l'intégrer au paquet ou de le retirer.
 - Le nom du nœud du jack intégré, `alsa_output.platform-bcm2835_audio.*`, n'a pas été vérifié sur du matériel.
 - L'extinction par appui long sur PLAY n'a pas été essayée en vrai : seule la règle polkit a été vérifiée.
