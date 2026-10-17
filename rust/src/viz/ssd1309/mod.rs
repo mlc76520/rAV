@@ -11,6 +11,7 @@ use super::editor::{Layout, PlaylistEditor};
 use crate::display::Canvas;
 use crate::font::{Fonts, Size};
 use crate::mpd::MpdClient;
+use crate::ui::VolumeBar;
 use std::sync::Arc;
 
 pub fn all(mpd: Arc<MpdClient>) -> Vec<Box<dyn Viz>> {
@@ -68,16 +69,9 @@ impl<const N: usize> Peaks<N> {
     }
 }
 
-/// Volume bar in a cleared box across the middle of the panel.
+/// Volume bar as on the SSD1322, filled solid: a gradient would lose its
+/// dark end to the mono threshold.
 pub fn volume_overlay(cv: &mut Canvas, fonts: &Fonts, vol: i32) {
-    let vol = vol.clamp(0, 100);
-    cv.rect(15, 25, 98, 16, true, 0);
-    cv.rect(14, 24, 100, 18, false, 15);
-    cv.rect(18, 28, 88, 8, false, 15);
-    let bar_w = vol * 88 / 100;
-    if bar_w > 0 {
-        cv.rect(18, 28, bar_w, 8, true, 15);
-    }
-    let text = format!("{vol}%");
-    fonts.draw(cv, (cv.width() - fonts.width(&text, Size::Small)) / 2, 23, &text, Size::Small, 15);
+    const BAR: VolumeBar = VolumeBar { w: 112, h: 16, size: Size::Small, gradient: false, tick_level: 15 };
+    BAR.draw(cv, fonts, vol);
 }

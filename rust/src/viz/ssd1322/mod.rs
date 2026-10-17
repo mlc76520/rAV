@@ -13,7 +13,7 @@ use super::editor::{Layout, PlaylistEditor};
 use crate::display::Canvas;
 use crate::font::{Fonts, Size};
 use crate::mpd::MpdClient;
-use crate::ui::dither;
+use crate::ui::VolumeBar;
 use std::sync::Arc;
 
 pub const SCREEN_WIDTH: usize = 240;
@@ -101,53 +101,8 @@ pub fn disc(cv: &mut Canvas, cx: i32, cy: i32, r: f32, inner: u8, rim: u8) {
     }
 }
 
-/// Rounded bar centred on the panel: dithered gradient fill, quarter ticks
-/// on the empty track, percentage in the middle drawn black over the fill
-/// and white over the track, split pixel-exactly at the fill edge.
+/// Volume bar with a dithered gradient fill.
 pub fn volume_bar(cv: &mut Canvas, fonts: &Fonts, vol: i32) {
-    const W: i32 = 200;
-    const H: i32 = 26;
-    const X: i32 = (SCREEN_WIDTH as i32 - W) / 2;
-    const Y: i32 = (SCREEN_HEIGHT as i32 - H) / 2;
-    let vol = vol.clamp(0, 100);
-
-    cv.rect(X - 4, Y - 4, W + 8, H + 8, true, 0); // backdrop
-    // Frame with cut corners (reads as rounded at this size).
-    cv.line(X + 2, Y, X + W - 3, Y, 15);
-    cv.line(X + 2, Y + H - 1, X + W - 3, Y + H - 1, 15);
-    cv.line(X, Y + 2, X, Y + H - 3, 15);
-    cv.line(X + W - 1, Y + 2, X + W - 1, Y + H - 3, 15);
-    for (px, py) in [(X + 1, Y + 1), (X + W - 2, Y + 1), (X + 1, Y + H - 2), (X + W - 2, Y + H - 2)] {
-        cv.pixel(px, py, 15);
-    }
-
-    // Track, 1 px inside the frame.
-    const TX: i32 = X + 2;
-    const TY: i32 = Y + 2;
-    const TW: i32 = W - 4;
-    const TH: i32 = H - 4;
-    let fill = vol * TW / 100;
-    for i in 0..fill {
-        let lv = 4.0 + 11.0 * i as f32 / (TW - 1) as f32;
-        for r in 0..TH {
-            cv.pixel(TX + i, TY + r, dither(lv, TX + i, TY + r));
-        }
-    }
-    for q in 1..4 {
-        let tx = TX + TW * q / 4;
-        if tx >= TX + fill {
-            cv.line(tx, TY, tx, TY + 2, 4);
-            cv.line(tx, TY + TH - 3, tx, TY + TH - 1, 4);
-        }
-    }
-
-    let text = format!("{vol}%");
-    let text_x = X + (W - fonts.width(&text, Size::Regular)) / 2;
-    let base = TY + (TH + fonts.cap_height(Size::Regular)) / 2;
-    if fill > 0 {
-        fonts.render(cv, &text, text_x, base, Size::Regular, true, 15, Some((TX, fill)));
-    }
-    if fill < TW {
-        fonts.render(cv, &text, text_x, base, Size::Regular, false, 15, Some((TX + fill, TW - fill)));
-    }
+    const BAR: VolumeBar = VolumeBar { w: 200, h: 26, size: Size::Regular, gradient: true, tick_level: 4 };
+    BAR.draw(cv, fonts, vol);
 }

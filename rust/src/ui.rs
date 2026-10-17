@@ -1,5 +1,5 @@
-//! Drawing helpers shared by both panel families: ordered dithering and
-//! the scrolling track title.
+//! Drawing helpers shared by both panel families: ordered dithering, the
+//! volume bar and the scrolling track title.
 
 use crate::display::Canvas;
 use crate::font::{Fonts, Size};
@@ -15,6 +15,66 @@ pub fn dither(lv: f32, x: i32, y: i32) -> u8 {
     let lo = lv as i32;
     let frac16 = ((lv - lo as f32) * 16.0) as i32;
     (lo + (frac16 > BAYER[(y & 3) as usize][(x & 3) as usize] as i32) as i32).min(15) as u8
+}
+
+/// Look of the volume bar on one panel family.
+pub struct VolumeBar {
+    pub w: i32,
+    pub h: i32,
+    pub size: Size,
+    /// Dithered dark-to-light fill (greyscale); else solid (mono).
+    pub gradient: bool,
+    pub tick_level: u8,
+}
+
+impl VolumeBar {
+    /// Rounded bar centred on the panel: filled up to the volume, quarter
+    /// ticks on the empty track, percentage in the middle drawn black over
+    /// the fill and white over the track, split pixel-exactly at the fill
+    /// edge.
+    pub fn draw(&self, cv: &mut Canvas, fonts: &Fonts, vol: i32) {
+        let (w, h) = (self.w, self.h);
+        let (x, y) = ((cv.width() - w) / 2, (cv.height() - h) / 2);
+        let vol = vol.clamp(0, 100);
+
+        cv.rect(x - 4, y - 4, w + 8, h + 8, true, 0); // backdrop
+        // Frame with cut corners (reads as rounded at this size).
+        cv.line(x + 2, y, x + w - 3, y, 15);
+        cv.line(x + 2, y + h - 1, x + w - 3, y + h - 1, 15);
+        cv.line(x, y + 2, x, y + h - 3, 15);
+        cv.line(x + w - 1, y + 2, x + w - 1, y + h - 3, 15);
+        for (px, py) in [(x + 1, y + 1), (x + w - 2, y + 1), (x + 1, y + h - 2), (x + w - 2, y + h - 2)] {
+            cv.pixel(px, py, 15);
+        }
+
+        // Track, 1 px inside the frame.
+        let (tx, ty, tw, th) = (x + 2, y + 2, w - 4, h - 4);
+        let fill = vol * tw / 100;
+        for i in 0..fill {
+            let lv = 4.0 + 11.0 * i as f32 / (tw - 1) as f32;
+            for r in 0..th {
+                let level = if self.gradient { dither(lv, tx + i, ty + r) } else { 15 };
+                cv.pixel(tx + i, ty + r, level);
+            }
+        }
+        for q in 1..4 {
+            let qx = tx + tw * q / 4;
+            if qx >= tx + fill {
+                cv.line(qx, ty, qx, ty + 2, self.tick_level);
+                cv.line(qx, ty + th - 3, qx, ty + th - 1, self.tick_level);
+            }
+        }
+
+        let text = format!("{vol}%");
+        let text_x = x + (w - fonts.width(&text, self.size)) / 2;
+        let base = ty + (th + fonts.cap_height(self.size)) / 2;
+        if fill > 0 {
+            fonts.render(cv, &text, text_x, base, self.size, true, 15, Some((tx, fill)));
+        }
+        if fill < tw {
+            fonts.render(cv, &text, text_x, base, self.size, false, 15, Some((tx + fill, tw - fill)));
+        }
+    }
 }
 
 #[derive(PartialEq, Clone, Copy)]
