@@ -192,7 +192,7 @@ impl App {
         self.last_cycle = self.last_viz_change;
         println!("{why}: {}", self.vizs[i].name());
         if self.profile.features.transition && !self.sleeping {
-            self.transition.start(self.left.canvas.width());
+            self.transition.start(&self.left.canvas, &self.right.canvas);
         }
     }
 
@@ -431,13 +431,6 @@ impl App {
                 continue;
             }
 
-            if self.transition.update(&mut self.left.canvas, &mut self.right.canvas, &self.fonts) {
-                self.left.present();
-                self.right.present();
-                Self::pace(&mut next_frame);
-                continue;
-            }
-
             let in_editor = Some(self.current) == self.editor;
             if !in_editor && self.last_viz_change.elapsed() > AUTO_CYCLE_IDLE
                 && self.last_cycle.elapsed() >= AUTO_CYCLE_INTERVAL {
@@ -448,6 +441,7 @@ impl App {
             }
 
             self.render_current();
+            self.transition.update(&mut self.left.canvas, &mut self.right.canvas, &self.fonts);
             if let Some((vol, since)) = self.overlay {
                 if since.elapsed() >= OVERLAY_DURATION {
                     self.overlay = None;

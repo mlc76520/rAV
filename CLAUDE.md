@@ -126,6 +126,7 @@ Garder le style et la densité de commentaires du code existant.
 - **2026-10-17** : 2.0.4, menu de l'éditeur (Queue, Albums, Folders, Playlists), essayé sur le BureauRPI.
 - **2026-10-17** : 2.0.5, le graphe PipeWire suit la fréquence de la source au lieu de tout rééchantillonner à 44100 Hz.
 - **2026-10-17** : 2.0.6, entrées Artists et Update database dans le menu de l'éditeur.
+- **2026-10-17** : 2.0.7, overlay de volume du SSD1309 au style du SSD1322 (`ui::VolumeBar` commun) ; la transition Matrix recouvre l'ancienne visualisation et découvre la nouvelle en 750 ms.
 
 ## Non vérifié ou à faire
 
