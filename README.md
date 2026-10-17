@@ -14,7 +14,7 @@ The project combines live FFT analysis of what the box is playing, an MPD client
 - **PipeWire capture** of the output's monitor: shows exactly what is played (MPD, Bluetooth, anything else) and lets the output suspend when idle
 - **Three-resolution FFT** (bass / mid / treble) for fine bass bins and fast treble, synced to the moment the sound reaches the speakers
 - **7-band and 64/120-band spectrum analyzers** with peak-hold, smoothing and gravity decay
-- **MPD integration**: now-playing info, play/pause, next/previous, volume and a built-in library browser (queue, albums, folders, stored playlists)
+- **MPD integration**: now-playing info, play/pause, next/previous, volume and a built-in library browser (queue, artists, albums, folders, stored playlists, database update)
 - **Bluetooth A2DP**: track metadata, MPD auto-pause when a phone starts streaming; while a phone is the active source, the transport buttons and the knob drive it (AVRCP)
 - **Sleep mode**: after 10 s of silence both panels collapse with a CRT-style animation; they wake when audio returns
 - **"Matrix rain" transition** between visualizations, and **power off** by holding PLAY
@@ -32,7 +32,7 @@ The project combines live FFT analysis of what the box is playing, an MPD client
 | **Empty Spectrum** | Same 7 bands, outline-only style |
 | **Waveform** | Time-domain oscilloscope trace |
 | **Track Info** | Scrolling title, bitrate/format, elapsed/total time, progress bar, mini spectrum, plus a 64-band spectrum on the right panel |
-| **Playlist Editor** | Menu: queue (jump to a song), albums, folders, stored playlists; play now or add to queue |
+| **Playlist Editor** | Menu: queue (jump to a song), artists, albums, folders, stored playlists, database update; play now or add to queue |
 
 <img src="img/20260420_102145.jpg" alt="VUmeter" width="300">
 <img src="img/20260420_102159.jpg" alt="Spectrum" width="300">

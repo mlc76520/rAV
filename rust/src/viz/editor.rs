@@ -1,6 +1,7 @@
-//! Playlist editor: a menu (left panel) opens the queue, the albums, the
-//! music folders or the stored playlists; an album, folder or playlist can be
-//! played, queued, or have single tracks queued, and a queued song played.
+//! Playlist editor: a menu (left panel) opens the queue, the artists, the
+//! albums, the music folders or the stored playlists, or rescans the library;
+//! an artist, album, folder or playlist can be played, queued, or have single
+//! tracks queued, and a queued song played.
 //! The right panel shows what is playing over a mirrored spectrum. Library
 //! queries run on a worker thread and hand their result back through a
 //! channel, polled each frame. The logic is shared; each panel family
@@ -47,6 +48,7 @@ pub struct Layout {
 #[derive(Clone)]
 enum Source {
     Queue,
+    Artists,
     Albums,
     Playlists,
     Contents(Collection),
@@ -56,11 +58,12 @@ impl Source {
     fn title(&self) -> String {
         match self {
             Source::Queue => "QUEUE".into(),
+            Source::Artists => "ARTISTS".into(),
             Source::Albums => "ALBUMS".into(),
             Source::Playlists => "PLAYLISTS".into(),
             Source::Contents(Collection::Folder(p)) if p.is_empty() => "FOLDERS".into(),
             Source::Contents(Collection::Folder(p)) => mpd::basename(p).into(),
-            Source::Contents(Collection::Album(n) | Collection::Playlist(n)) => n.clone(),
+            Source::Contents(Collection::Album(n, _) | Collection::Artist(n) | Collection::Playlist(n)) => n.clone(),
         }
     }
 }
@@ -73,6 +76,7 @@ enum Action {
     Add(Collection),
     PlayPos(usize),
     AddFile(String),
+    UpdateDatabase,
 }
 
 struct Row {
@@ -106,8 +110,11 @@ fn list(mpd: &MpdClient, source: &Source) -> Listing {
             let mark = |i| if Some(i) == current { "> " } else { "" };
             songs.iter().enumerate().map(|(i, t)| Row::new(format!("{}{}", mark(i), t.title), Action::PlayPos(i))).collect()
         }
+        Source::Artists => mpd.artists().into_iter()
+            .map(|a| Row::new(a.clone(), Action::Open(Source::Contents(Collection::Artist(a)))))
+            .collect(),
         Source::Albums => mpd.albums().into_iter()
-            .map(|a| Row::new(a.clone(), Action::Open(Source::Contents(Collection::Album(a)))))
+            .map(|a| Row::new(a.clone(), Action::Open(Source::Contents(Collection::Album(a, None)))))
             .collect(),
         Source::Playlists => mpd.playlists().into_iter()
             .map(|n| Row::new(n.clone(), Action::Open(Source::Contents(Collection::Playlist(n)))))
@@ -118,7 +125,8 @@ fn list(mpd: &MpdClient, source: &Source) -> Listing {
                 Collection::Folder(p) if p.is_empty() => Vec::new(),
                 _ => {
                     let noun = match c {
-                        Collection::Album(_) => "album",
+                        Collection::Album(..) => "album",
+                        Collection::Artist(_) => "artist",
                         Collection::Folder(_) => "folder",
                         Collection::Playlist(_) => "playlist",
                     };
@@ -128,6 +136,13 @@ fn list(mpd: &MpdClient, source: &Source) -> Listing {
                     ]
                 }
             };
+            // An artist lists their albums, the others their songs
+            if let Collection::Artist(artist) = c {
+                rows.extend(mpd.artist_albums(artist).into_iter().map(|a| {
+                    Row::new(a.clone(), Action::Open(Source::Contents(Collection::Album(a, Some(artist.clone())))))
+                }));
+                return Listing { rows, cursor };
+            }
             rows.extend(mpd.contents(c).into_iter().map(|e| match e {
                 Entry::Dir(d) => Row::new(format!("{}/", mpd::basename(&d)), Action::Open(Source::Contents(Collection::Folder(d)))),
                 Entry::Song(t) => Row::new(track_label(&t), Action::AddFile(t.file)),
@@ -198,9 +213,11 @@ impl PlaylistEditor {
     fn menu() -> Screen {
         let rows = vec![
             Row::new("Queue", Action::Open(Source::Queue)),
+            Row::new("Artists", Action::Open(Source::Artists)),
             Row::new("Albums", Action::Open(Source::Albums)),
             Row::new("Folders", Action::Open(Source::Contents(Collection::Folder(String::new())))),
             Row::new("Playlists", Action::Open(Source::Playlists)),
+            Row::new("Update database", Action::UpdateDatabase),
         ];
         Screen { title: "LIBRARY".into(), rows, pos: ListPos::default() }
     }
@@ -253,7 +270,8 @@ impl PlaylistEditor {
             Action::Add(c) => {
                 self.mpd.add(&c);
                 self.set_feedback(match c {
-                    Collection::Album(_) => "Album added !",
+                    Collection::Album(..) => "Album added !",
+                    Collection::Artist(_) => "Artist added !",
                     Collection::Folder(_) => "Folder added !",
                     Collection::Playlist(_) => "Playlist added !",
                 });
@@ -265,6 +283,10 @@ impl PlaylistEditor {
             Action::AddFile(file) => {
                 self.mpd.add_track(&file);
                 self.set_feedback("Track added !");
+            }
+            Action::UpdateDatabase => {
+                self.mpd.update_database();
+                self.set_feedback("Updating...");
             }
         }
     }
@@ -386,6 +408,7 @@ impl PlaylistEditor {
         let sel = match screen.rows.get(screen.pos.cursor).map(|r| &r.action) {
             Some(Action::Open(_)) => "SEL:open ",
             Some(Action::Play(_) | Action::PlayPos(_)) => "SEL:play ",
+            Some(Action::UpdateDatabase) => "SEL:run ",
             Some(Action::Add(_) | Action::AddFile(_)) => "SEL:add ",
             None => "",
         };

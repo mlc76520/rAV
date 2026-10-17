@@ -22,7 +22,7 @@ Garder le style et la densité de commentaires du code existant.
   - `src/profile.rs` : les deux profils d'écran (SSD1309, SSD1322) et leur chargement ;
   - `src/app.rs` et `main.rs` : démarrage, commandes, boucle principale, animation CRT, veille, extinction ;
   - `src/display/` : le `Canvas` commun en niveaux 0 à 15 et les pilotes `ssd1309.rs` et `ssd1322.rs` ;
-  - `src/viz/` : le trait `Viz` et l'éditeur de playlist commun (`editor.rs`, une `Layout` par écran : menu Queue / Albums / Folders / Playlists, pile d'écrans dont chaque ligne porte son action, toujours rouvert sur le menu), puis les familles `ssd1309/` (les 6 de rAV) et `ssd1322/` (14, dont 2 cachées) ;
+  - `src/viz/` : le trait `Viz` et l'éditeur de playlist commun (`editor.rs`, une `Layout` par écran : menu Queue / Artists / Albums / Folders / Playlists / Update database, pile d'écrans dont chaque ligne porte son action, toujours rouvert sur le menu), puis les familles `ssd1309/` (les 6 de rAV) et `ssd1322/` (14, dont 2 cachées) ;
   - `src/audio.rs` et `bands.rs` : capture PipeWire, FFT et tables de bandes ;
   - `src/mpd.rs`, `bluetooth.rs` (zbus), `font.rs` (FreeType), `ui.rs`, `transition.rs`, `hw.rs` (gpiocdev, spidev) et `rotary.rs` ;
   - `src/render_test.rs` : le test de rendu hors ligne.
@@ -125,6 +125,7 @@ Garder le style et la densité de commentaires du code existant.
   - 2.0.3 : `visualizer.conf` enfin suivi par git (il était masqué par `visualizer.*` dans `.gitignore`), règle de priorité I2S valable sur Pi 5, MPD sur toutes les interfaces. Installé sur le SalonRPI et sur le BureauRPI ; sur ce dernier, à la place de l'installation manuelle (`rav.service`, sauvegardée dans `~/rav/backup_pre_rav-audio_2026-10-16/`).
 - **2026-10-17** : 2.0.4, menu de l'éditeur (Queue, Albums, Folders, Playlists), essayé sur le BureauRPI.
 - **2026-10-17** : 2.0.5, le graphe PipeWire suit la fréquence de la source au lieu de tout rééchantillonner à 44100 Hz.
+- **2026-10-17** : 2.0.6, entrées Artists et Update database dans le menu de l'éditeur.
 
 ## Non vérifié ou à faire
 

@@ -116,7 +116,9 @@ pub enum Entry {
 /// A group of songs the editor can open, play or queue as a whole.
 #[derive(Clone)]
 pub enum Collection {
-    Album(String),
+    /// Album name, and the artist when opened from one (only their songs).
+    Album(String, Option<String>),
+    Artist(String),
     /// Path relative to music_directory; "" is the root.
     Folder(String),
     Playlist(String),
@@ -126,15 +128,25 @@ impl Collection {
     /// Command that appends the whole collection to the queue.
     fn add_cmd(&self) -> String {
         match self {
-            Collection::Album(a) => format!("findadd album {}", quote(a)),
+            Collection::Album(..) | Collection::Artist(_) => format!("findadd {}", self.filter()),
             Collection::Folder(p) => format!("add {}", quote(p)),
             Collection::Playlist(n) => format!("load {}", quote(n)),
         }
     }
 
+    /// Tag filter of an album or an artist.
+    fn filter(&self) -> String {
+        match self {
+            Collection::Album(a, None) => format!("album {}", quote(a)),
+            Collection::Album(a, Some(artist)) => format!("album {} artist {}", quote(a), quote(artist)),
+            Collection::Artist(a) => format!("artist {}", quote(a)),
+            _ => String::new(),
+        }
+    }
+
     fn list_cmd(&self) -> String {
         match self {
-            Collection::Album(a) => format!("find album {}", quote(a)),
+            Collection::Album(..) | Collection::Artist(_) => format!("find {}", self.filter()),
             Collection::Folder(p) if p.is_empty() => "lsinfo".into(),
             Collection::Folder(p) => format!("lsinfo {}", quote(p)),
             Collection::Playlist(n) => format!("listplaylistinfo {}", quote(n)),
@@ -386,16 +398,38 @@ impl MpdClient {
         })
     }
 
-    pub fn albums(&self) -> Vec<String> {
-        let mut albums: Vec<String> = self
-            .with_conn(Duration::from_secs(2), |c| c.run("list album"))
+    /// Sorted non-empty values of `key` in the response to `cmd`.
+    fn names(&self, cmd: &str, key: &str) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .with_conn(Duration::from_secs(2), |c| c.run(cmd))
             .unwrap_or_default()
             .into_iter()
-            .filter(|(k, v)| k == "Album" && !v.is_empty())
+            .filter(|(k, v)| k == key && !v.is_empty())
             .map(|(_, v)| v)
             .collect();
-        albums.sort();
-        albums
+        names.sort();
+        names
+    }
+
+    pub fn albums(&self) -> Vec<String> {
+        self.names("list album", "Album")
+    }
+
+    pub fn artists(&self) -> Vec<String> {
+        self.names("list artist", "Artist")
+    }
+
+    pub fn artist_albums(&self, artist: &str) -> Vec<String> {
+        self.names(&format!("list album artist {}", quote(artist)), "Album")
+    }
+
+    pub fn playlists(&self) -> Vec<String> {
+        self.names("listplaylists", "playlist")
+    }
+
+    /// Rescans music_directory in the background.
+    pub fn update_database(&self) {
+        self.quick(&["update".into()]);
     }
 
     /// What `c` contains: songs, plus sub-directories for a folder.
@@ -414,18 +448,6 @@ impl MpdClient {
             Ok((songs, get(&st, "song").and_then(|v| v.parse().ok())))
         })
         .unwrap_or_default()
-    }
-
-    pub fn playlists(&self) -> Vec<String> {
-        let mut names: Vec<String> = self
-            .with_conn(Duration::from_secs(2), |c| c.run("listplaylists"))
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(k, _)| k == "playlist")
-            .map(|(_, v)| v)
-            .collect();
-        names.sort();
-        names
     }
 
     pub fn add(&self, c: &Collection) {
