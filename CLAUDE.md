@@ -1,4 +1,4 @@
-# rAV — visualiseur et chaîne audio du « SalonRPI »
+# rAV — façade physique pour MPD (SalonRPI et BureauRPI)
 
 L'utilisateur échange en français. Le dépôt est public (README en anglais) :
 le code, ses commentaires et **les textes affichés à l'écran sont en anglais**.
@@ -11,6 +11,7 @@ Garder le style et la densité de commentaires du code existant.
   - un boîtier **Pi 5** avec deux OLED **SSD1322 240×128** en niveaux de gris.
 - **Façade commune** : quatre boutons (VIZ GPIO 27, PLAY 26, FW 4, RW 6), un encodeur rotatif (17 / 5, bouton 13) et une LED (16). Le bouton FW est en GPIO 4 sur les deux boîtiers ; voir les pièges.
 - **Chaîne audio** : MPD et Bluetooth A2DP passent par **PipeWire** vers la sortie par défaut. PipeWire tourne en instance unique sous l'utilisateur `mpd`, démarrée au boot par le linger systemd.
+- **Présentation publique** (README, paquet) depuis le 2026-10-17 : une façade physique pour MPD (lecteur réseau avec molette, boutons et deux écrans), le visualiseur étant un des points forts, pas le sujet principal.
 - **Visualiseur** : la version Rust (`rust/`), qui capte *passivement* le monitor de cette sortie via l'API PipeWire native.
 - **Installation** : tout est mis en place par le paquet Debian **`rav-audio`** (`packaging/`), en version 2.x depuis le 2026-10-16.
 - **Testé sur le matériel SSD1309** (SalonRPI, Pi 3) : affichage, capture, quatre boutons, encodeur, éditeur, transition, overlay et Bluetooth, avec 7 % de CPU et 10 Mo de mémoire.

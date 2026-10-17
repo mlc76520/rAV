@@ -3,7 +3,7 @@ name = "rav-visualizer"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Dual OLED (SSD1309 or SSD1322) audio visualizer for the Raspberry Pi"
+description = "Front panel for MPD on the Raspberry Pi: controls, library browser and dual OLED visualizations"
 
 [dependencies]
 anyhow = "1.0.104"

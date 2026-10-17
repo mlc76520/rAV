@@ -7,11 +7,12 @@ Depends: @SHLIBS@, mpd (>= 0.24), pipewire, pipewire-bin, wireplumber, libspa-0.
 Recommends: fonts-dejavu-core, polkitd
 Section: sound
 Priority: optional
-Description: SalonRPI audio box: MPD, PipeWire, Bluetooth and dual OLED visualizer
- Turns a Raspberry Pi into a music player with two OLED panels: MPD and
- Bluetooth A2DP play through PipeWire (running as user mpd), and the
- visualizer draws the monitor of the output on the panels. The transport
- buttons drive MPD, or the connected phone over AVRCP.
+Description: MPD player with a physical front panel and dual OLED displays
+ Turns a Raspberry Pi into a network music player with a front panel: a
+ rotary knob and four buttons drive MPD (playback, volume, queue and a
+ library browser on the panels), or the connected phone over AVRCP. MPD
+ and Bluetooth A2DP play through PipeWire (running as user mpd), and the
+ two OLED panels show live visualizations of the output's monitor.
  .
  Panels (display = ... in /etc/rav-audio/visualizer.conf): SSD1309
  128x64 monochrome or SSD1322 240x128 greyscale.

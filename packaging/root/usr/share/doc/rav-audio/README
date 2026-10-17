@@ -1,5 +1,5 @@
-rav-audio - SalonRPI audio box
-==============================
+rav-audio - MPD player with a physical front panel
+==================================================
 
 Audio path: MPD and Bluetooth A2DP -> PipeWire (user mpd, lingering
 user manager) -> default output. The visualizer (audio-visualizer.service,

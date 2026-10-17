@@ -1,23 +1,35 @@
-# Raspberry Audio Visualizer
+# rAV — a physical front panel for MPD
 
-A real-time stereo audio visualizer for the Raspberry Pi that drives **two OLED panels** over SPI, one per channel: either **SSD1309 128×64 monochrome** or **SSD1322 240×128 greyscale**. Written in Rust (`rust/`), it runs on the Raspberry Pi 3 and 5 alike.
+rAV turns a Raspberry Pi into a standalone network music player with a real front panel: a rotary knob, four buttons and two OLED displays. It drives MPD (playback, volume, queue and the whole library: artists, albums, folders, playlists), takes over a phone streaming over Bluetooth, and fills the two panels, one per stereo channel, with live visualizations of what is playing.
 
-The project combines live FFT analysis of what the box is playing, an MPD client, Bluetooth (A2DP + AVRCP) support and a small physical control surface (rotary encoder + four buttons) into a standalone "hi-fi display" appliance. A Debian package sets up the whole audio stack around it.
+A Debian package sets up the whole stack: MPD, PipeWire, Bluetooth and the display program. Runs on the Raspberry Pi 3 and 5, with SSD1309 (128×64 mono) or SSD1322 (240×128 greyscale) panels; written in Rust (`rust/`).
 ---
 ![Intro](img/20260417_084829.jpg)
 ---
 
 ## Features
 
+### Player
+
+- **Front panel for MPD**: play/pause, next/previous and volume from the knob and buttons; hold PLAY to power the box off
+- **Library browser** on the panels: the queue (jump to a song), artists, albums, folders and stored playlists, played at once or added to the queue, plus a database update
+- **Network player**: MPD listens on the network, so any MPD client (phone app, desktop) can drive the box too
+- **No resampling**: the PipeWire graph follows the source rate (44.1 to 192 kHz), towards an I2S DAC (HifiBerry...) or the onboard jack
+
+### Bluetooth
+
+- **A2DP sink**: a phone can stream to the box; MPD pauses automatically when it starts
+- **Phone control**: while the phone is the active source, its track is shown and the buttons and knob drive it (AVRCP)
+
+### Displays
+
 - **One program, two panel types**, chosen in `/etc/rav-audio/visualizer.conf`; each panel has its own set of visualizations drawn for its resolution
 - **Two independent OLEDs**: left and right channels rendered separately
 - **PipeWire capture** of the output's monitor: shows exactly what is played (MPD, Bluetooth, anything else) and lets the output suspend when idle
 - **Three-resolution FFT** (bass / mid / treble) for fine bass bins and fast treble, synced to the moment the sound reaches the speakers
 - **7-band and 64/120-band spectrum analyzers** with peak-hold, smoothing and gravity decay
-- **MPD integration**: now-playing info, play/pause, next/previous, volume and a built-in library browser (queue, artists, albums, folders, stored playlists, database update)
-- **Bluetooth A2DP**: track metadata, MPD auto-pause when a phone starts streaming; while a phone is the active source, the transport buttons and the knob drive it (AVRCP)
 - **Sleep mode**: after 10 s of silence both panels collapse with a CRT-style animation; they wake when audio returns
-- **"Matrix rain" transition** between visualizations, and **power off** by holding PLAY
+- **"Matrix rain" transition** wiping from one visualization to the next, and a volume overlay while the knob turns
 
 ---
 
@@ -52,7 +64,7 @@ A volume overlay is drawn over the current visualization whenever the rotary kno
 ## Parts list
 - 1 Raspberry pi 3B or 5
 - 1 Rotary encoder 
-- 2 128x64 waveshare SPI OLED screens white
+- 2 128x64 waveshare SPI OLED screens white (SSD1309), or 2 SSD1322 240x128 greyscale SPI OLEDs
 - 4 momentary pushbuttons
 - 4 smd1206 LEDs 6000k
 - 1 100nF capacitor
