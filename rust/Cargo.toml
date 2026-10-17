@@ -3,7 +3,7 @@ name = "rav-visualizer"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Dual SSD1309 OLED audio visualizer for the Raspberry Pi (Rust port of rav_unified.cpp)"
+description = "Dual OLED (SSD1309 or SSD1322) audio visualizer for the Raspberry Pi"
 
 [dependencies]
 anyhow = "1.0.104"

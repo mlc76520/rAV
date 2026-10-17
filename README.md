@@ -215,7 +215,7 @@ rust/src
 packaging/            — Debian package (build-deb.sh, files, maintainer scripts)
 ```
 
-`rav_unified.cpp` is the original C++ implementation (SSD1309 only; bcm2835 or lgpio backends, build commands in its header), kept for reference. `bluetooth_a2dp_setup.txt` describes the older bluez-alsa Bluetooth setup.
+The original C++ implementation (`rav_unified.cpp`, SSD1309 only) is in the git history up to rav-audio 2.0.4. `bluetooth_a2dp_setup.txt` describes the older bluez-alsa Bluetooth setup.
 
 ---
 

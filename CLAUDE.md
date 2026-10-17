@@ -30,7 +30,7 @@ Garder le style et la densité de commentaires du code existant.
 - `packaging/root/` : arborescence installée telle quelle. Tout ce qui est sous `etc/` devient un conffile.
 - `packaging/debian/` : `control.in`, `postinst`, `prerm` et `postrm`.
 - `trixel-square.ttf` : la police du SSD1309. Elle est cherchée dans le répertoire de travail du service, `/usr/share/rav-audio` ; `build-deb.sh` la prend à la racine du dépôt.
-- `rav_unified.cpp` : l'ancienne version C++, SSD1309 seulement, gardée pour référence.
+- `rav_unified.cpp`, l'ancienne version C++ (SSD1309 seulement), a été retirée le 2026-10-17 : elle reste dans l'historique git (jusqu'au commit `2fb656b`).
 - `README.md` (public, en anglais), `img/`, `3D files/` (boîtier imprimé en STL/GLB) et `LICENSE`.
 - `bluetooth_a2dp_setup.txt` : l'ancienne configuration bluez-alsa, gardée pour référence seulement.
 - `RPI5_SSD1322_Vizualiser_*/` : non suivi par git. C'est l'origine de la version SSD1322 (C++ et Rust), fusionnée dans `rust/`. Il contient aussi la police FreePixel.
