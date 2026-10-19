@@ -42,7 +42,7 @@ Garder le style et la densité de commentaires du code existant.
 
 - **Choix au démarrage** : la variable `RAV_DISPLAY`, sinon `display = ssd1309|ssd1322` dans `/etc/rav-audio/visualizer.conf`, sinon SSD1309.
 - **Contenu d'un profil** (`src/profile.rs`) : écran, taille, vitesse SPI, broches, police et ses tailles, FFT basse, table de bandes, sens de la molette, overlay de volume, liste des visualisations et fonctions activées.
-  - **SSD1309** : 6,25 MHz, FFT de 4096 avec un gain de √2 pour garder l'étalonnage fait en 8192, 64 bandes, police trixel en 8/10/14 px, molette `+1`. La transition et l'extinction sont activées, sans visualisations cachées.
+  - **SSD1309** : 6,25 MHz, FFT de 4096 avec un gain de √2 pour garder l'étalonnage fait en 8192, 64 bandes, police trixel en 8/10/14 px, molette `+1`. La transition et le menu Settings sont activés, sans visualisations cachées.
   - **SSD1322** : 20 MHz, FFT de 8192, 120 bandes, police FreePixel en 8/16/24 px, molette `-1`, avec visualisations cachées (appui long sur VIZ).
 - **Pilotes d'écran** : `ssd1309.rs` allume un pixel à partir du niveau 8 et range l'image par pages, en écriture synchrone. `ssd1322.rs` envoie 4 bits par pixel via un thread d'écriture.
 
@@ -136,6 +136,6 @@ Garder le style et la densité de commentaires du code existant.
 - La désinstallation du paquet n'a jamais été testée.
 - **BureauRPI** : `/etc/wireplumber/wireplumber.conf.d/60-local-headroom.conf` (hors paquet) garde `api.alsa.headroom = 8192`, environ 186 ms d'avance pour la synchro, en attendant de nouvelles mesures. Décider ensuite de l'intégrer au paquet ou de le retirer.
 - Le nom du nœud du jack intégré, `alsa_output.platform-bcm2835_audio.*`, n'a pas été vérifié sur du matériel.
-- L'extinction et le redémarrage depuis le menu Settings n'ont pas été essayés en vrai : seule la règle polkit a été vérifiée (pour l'extinction).
+- L'extinction et le redémarrage depuis le menu Settings n'ont pas été essayés en vrai : seules les règles polkit ont été vérifiées sous `mpd` (`pkcheck`, extinction et redémarrage, sur les deux boîtiers).
 - Le réglage Bluetooth du menu Settings (On/Off, Visible) dure jusqu'au redémarrage : `AutoEnable` et `bt-discoverable` le remettent à On et visible au boot.
 - `music_directory` dans `/etc/rav-audio/mpd.conf` est propre au SalonRPI : il pointe vers `/media/icarus3/music`.
