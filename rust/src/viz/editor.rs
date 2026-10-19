@@ -1,17 +1,22 @@
-//! Playlist editor: a menu (left panel) opens the queue, the artists, the
-//! albums, the music folders or the stored playlists, or rescans the library;
-//! an artist, album, folder or playlist can be played, queued, or have single
-//! tracks queued, and a queued song played.
-//! The right panel shows what is playing over a mirrored spectrum. Library
-//! queries run on a worker thread and hand their result back through a
+//! Playlist editor and settings: menus on the left panel, what is playing
+//! over a mirrored spectrum on the right.
+//! The library menu opens the queue, the artists, the albums, the music
+//! folders or the stored playlists, or rescans the library; an artist,
+//! album, folder or playlist can be played, queued, or have single tracks
+//! queued, and a queued song played. The settings menu shows the network,
+//! switches Bluetooth and its visibility, and restarts or powers off the box
+//! after a confirmation.
+//! Queries run on a worker thread and hand their result back through a
 //! channel, polled each frame. The logic is shared; each panel family
 //! supplies its Layout.
 
 use super::{Frame, Tier, Viz};
+use crate::bluetooth;
 use crate::display::Canvas;
 use crate::font::{Fonts, Size};
 use crate::mpd::{self, Collection, Entry, MpdClient, TrackInfo};
 use crate::snapshot::FrameSnapshot;
+use crate::system;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -52,6 +57,23 @@ enum Source {
     Albums,
     Playlists,
     Contents(Collection),
+    Network,
+    Bluetooth,
+    Confirm(Power),
+}
+
+/// Restart or power off, confirmed in the settings menu.
+#[derive(Clone, Copy)]
+pub enum Power {
+    Restart,
+    Off,
+}
+
+/// What the app must do after an input.
+pub enum Outcome {
+    Stay,
+    Exit,
+    Power(Power),
 }
 
 impl Source {
@@ -64,6 +86,10 @@ impl Source {
             Source::Contents(Collection::Folder(p)) if p.is_empty() => "FOLDERS".into(),
             Source::Contents(Collection::Folder(p)) => mpd::basename(p).into(),
             Source::Contents(Collection::Album(n, _) | Collection::Artist(n) | Collection::Playlist(n)) => n.clone(),
+            Source::Network => "NETWORK".into(),
+            Source::Bluetooth => "BLUETOOTH".into(),
+            Source::Confirm(Power::Restart) => "RESTART?".into(),
+            Source::Confirm(Power::Off) => "POWER OFF?".into(),
         }
     }
 }
@@ -77,6 +103,12 @@ enum Action {
     PlayPos(usize),
     AddFile(String),
     UpdateDatabase,
+    /// A line of information only.
+    Info,
+    Back,
+    Power(Power),
+    /// Sets a Bluetooth controller property (path, name, value).
+    Bluetooth(String, &'static str, bool),
 }
 
 struct Row {
@@ -90,10 +122,11 @@ impl Row {
     }
 }
 
-/// Rows of a list, with the row the cursor starts on.
+/// Rows of a list, with the row the cursor starts on (None: where it was,
+/// for a list refreshed in place).
 struct Listing {
     rows: Vec<Row>,
-    cursor: usize,
+    cursor: Option<usize>,
 }
 
 fn track_label(t: &TrackInfo) -> String {
@@ -102,11 +135,11 @@ fn track_label(t: &TrackInfo) -> String {
 
 /// Runs on the worker thread.
 fn list(mpd: &MpdClient, source: &Source) -> Listing {
-    let mut cursor = 0;
+    let mut cursor = Some(0);
     let rows = match source {
         Source::Queue => {
             let (songs, current) = mpd.queue();
-            cursor = current.unwrap_or(0);
+            cursor = Some(current.unwrap_or(0));
             let mark = |i| if Some(i) == current { "> " } else { "" };
             songs.iter().enumerate().map(|(i, t)| Row::new(format!("{}{}", mark(i), t.title), Action::PlayPos(i))).collect()
         }
@@ -149,6 +182,47 @@ fn list(mpd: &MpdClient, source: &Source) -> Listing {
             }));
             rows
         }
+        Source::Network => {
+            cursor = None;
+            let mut rows = vec![Row::new(format!("Host: {}", system::hostname()), Action::Info)];
+            let ifaces = system::interfaces();
+            if ifaces.is_empty() {
+                rows.push(Row::new("No network", Action::Info));
+            }
+            for i in ifaces {
+                if i.wifi {
+                    rows.push(Row::new(format!("Wi-Fi: {}", i.name), Action::Info));
+                    if let Some((ssid, signal)) = system::wifi_network() {
+                        rows.push(Row::new(format!("{ssid} ({signal}%)"), Action::Info));
+                    }
+                } else {
+                    rows.push(Row::new(format!("Wired: {}", i.name), Action::Info));
+                }
+                rows.push(Row::new(format!("IP: {}", i.addr), Action::Info));
+            }
+            rows
+        }
+        Source::Bluetooth => {
+            cursor = None;
+            match bluetooth::adapter() {
+                None => vec![Row::new("No adapter", Action::Info)],
+                Some(a) => {
+                    let onoff = if a.powered { "On" } else { "Off" };
+                    // bluez only makes a powered controller discoverable
+                    let visible = match (a.powered, a.discoverable) {
+                        (false, _) => Row::new("Visible: -", Action::Info),
+                        (true, d) => Row::new(format!("Visible: {}", if d { "Yes" } else { "No" }),
+                            Action::Bluetooth(a.path.clone(), "Discoverable", !d)),
+                    };
+                    vec![
+                        Row::new(format!("Name: {}", a.alias), Action::Info),
+                        Row::new(format!("Bluetooth: {onoff}"), Action::Bluetooth(a.path.clone(), "Powered", !a.powered)),
+                        visible,
+                    ]
+                }
+            }
+        }
+        Source::Confirm(p) => vec![Row::new("No", Action::Back), Row::new("Yes", Action::Power(*p))],
     };
     Listing { rows, cursor }
 }
@@ -158,6 +232,12 @@ struct Screen {
     title: String,
     rows: Vec<Row>,
     pos: ListPos,
+}
+
+impl Screen {
+    fn new(title: impl Into<String>, rows: Vec<Row>) -> Self {
+        Self { title: title.into(), rows, pos: ListPos::default() }
+    }
 }
 
 const FEEDBACK_TIME: Duration = Duration::from_millis(1500);
@@ -206,11 +286,11 @@ pub struct PlaylistEditor {
 impl PlaylistEditor {
     pub fn new(mpd: Arc<MpdClient>, layout: &'static Layout) -> Self {
         let mut ed = Self { mpd, layout, screens: Vec::new(), loading: None, feedback: None };
-        ed.on_activate();
+        ed.open_library();
         ed
     }
 
-    fn menu() -> Screen {
+    fn library() -> Screen {
         let rows = vec![
             Row::new("Queue", Action::Open(Source::Queue)),
             Row::new("Artists", Action::Open(Source::Artists)),
@@ -219,18 +299,33 @@ impl PlaylistEditor {
             Row::new("Playlists", Action::Open(Source::Playlists)),
             Row::new("Update database", Action::UpdateDatabase),
         ];
-        Screen { title: "LIBRARY".into(), rows, pos: ListPos::default() }
+        Screen::new("LIBRARY", rows)
+    }
+
+    fn settings() -> Screen {
+        let rows = vec![
+            Row::new("Network", Action::Open(Source::Network)),
+            Row::new("Bluetooth", Action::Open(Source::Bluetooth)),
+            Row::new("Restart", Action::Open(Source::Confirm(Power::Restart))),
+            Row::new("Power off", Action::Open(Source::Confirm(Power::Off))),
+        ];
+        Screen::new("SETTINGS", rows)
+    }
+
+    /// Runs `job` on the worker; its listing fills the last screen.
+    fn load(&mut self, job: impl FnOnce(&MpdClient) -> Listing + Send + 'static) {
+        let (tx, rx) = mpsc::channel();
+        let mpd = Arc::clone(&self.mpd);
+        thread::spawn(move || {
+            let _ = tx.send(job(&mpd));
+        });
+        self.loading = Some(rx);
     }
 
     /// Shows the source's list, filled when its query returns.
     fn open(&mut self, source: Source) {
-        self.screens.push(Screen { title: source.title(), rows: Vec::new(), pos: ListPos::default() });
-        let (tx, rx) = mpsc::channel();
-        let mpd = Arc::clone(&self.mpd);
-        thread::spawn(move || {
-            let _ = tx.send(list(&mpd, &source));
-        });
-        self.loading = Some(rx);
+        self.screens.push(Screen::new(source.title(), Vec::new()));
+        self.load(move |mpd| list(mpd, &source));
     }
 
     /// Picks up a finished library query.
@@ -239,7 +334,8 @@ impl PlaylistEditor {
         match rx.try_recv() {
             Ok(listing) => {
                 let screen = self.screens.last_mut().expect("menu screen");
-                screen.pos = ListPos::at(listing.cursor, listing.rows.len(), self.layout.visible_lines);
+                let cursor = listing.cursor.unwrap_or(screen.pos.cursor);
+                screen.pos = ListPos::at(cursor, listing.rows.len(), self.layout.visible_lines);
                 screen.rows = listing.rows;
                 self.loading = None;
             }
@@ -248,11 +344,19 @@ impl PlaylistEditor {
         }
     }
 
-    /// Back to the menu each time the editor opens.
-    pub fn on_activate(&mut self) {
-        self.screens = vec![Self::menu()];
+    fn reset(&mut self, root: Screen) {
+        self.screens = vec![root];
         self.loading = None;
         self.feedback = None;
+    }
+
+    /// The editor always opens on one of its two menus.
+    pub fn open_library(&mut self) {
+        self.reset(Self::library());
+    }
+
+    pub fn open_settings(&mut self) {
+        self.reset(Self::settings());
     }
 
     /// Shows msg for a moment, then goes back to the list.
@@ -260,7 +364,7 @@ impl PlaylistEditor {
         self.feedback = Some((msg, Instant::now()));
     }
 
-    fn run(&mut self, action: Action) {
+    fn run(&mut self, action: Action) -> Outcome {
         match action {
             Action::Open(source) => self.open(source),
             Action::Play(c) => {
@@ -288,28 +392,43 @@ impl PlaylistEditor {
                 self.mpd.update_database();
                 self.set_feedback("Updating...");
             }
+            Action::Info => {}
+            Action::Back => return self.back(),
+            Action::Power(p) => return Outcome::Power(p),
+            Action::Bluetooth(path, prop, on) => {
+                // Then re-read the controller: the rows show its new state
+                self.load(move |mpd| {
+                    bluetooth::set_adapter(&path, prop, on);
+                    list(mpd, &Source::Bluetooth)
+                });
+            }
         }
+        Outcome::Stay
     }
 
-    /// Returns true when the user backs out of the editor.
-    pub fn handle_input(&mut self, up: bool, down: bool, select: bool, back: bool) -> bool {
+    /// One level up; out of the editor from a menu.
+    fn back(&mut self) -> Outcome {
+        if self.screens.len() == 1 {
+            return Outcome::Exit;
+        }
+        self.screens.pop();
+        self.loading = None;
+        Outcome::Stay
+    }
+
+    pub fn handle_input(&mut self, up: bool, down: bool, select: bool, back: bool) -> Outcome {
         self.poll();
         if self.feedback.is_some() {
             if select || back {
                 self.feedback = None;
             }
-            return false;
+            return Outcome::Stay;
         }
         if back {
-            if self.screens.len() == 1 {
-                return true;
-            }
-            self.screens.pop();
-            self.loading = None;
-            return false;
+            return self.back();
         }
         if self.loading.is_some() {
-            return false;
+            return Outcome::Stay;
         }
         let visible = self.layout.visible_lines;
         let screen = self.screens.last_mut().expect("menu screen");
@@ -317,10 +436,10 @@ impl PlaylistEditor {
         if select {
             if let Some(row) = screen.rows.get(screen.pos.cursor) {
                 let action = row.action.clone();
-                self.run(action);
+                return self.run(action);
             }
         }
-        false
+        Outcome::Stay
     }
 
     fn row(&self, cv: &mut Canvas, fonts: &Fonts, row: usize, label: &str, selected: bool) {
@@ -374,7 +493,8 @@ impl PlaylistEditor {
         let screen = self.screens.last().expect("menu screen");
         self.header(cv, fonts, &fonts.truncate(&screen.title, l.row_text_w - 2, l.size));
         let message = |cv: &mut Canvas, (x, y): (i32, i32), text| fonts.draw(cv, x, y, text, l.size, 15);
-        if self.loading.is_some() {
+        // A list refreshed in place stays up meanwhile
+        if self.loading.is_some() && screen.rows.is_empty() {
             message(cv, l.loading_at, "Loading...");
             return;
         }
@@ -408,7 +528,10 @@ impl PlaylistEditor {
         let sel = match screen.rows.get(screen.pos.cursor).map(|r| &r.action) {
             Some(Action::Open(_)) => "SEL:open ",
             Some(Action::Play(_) | Action::PlayPos(_)) => "SEL:play ",
-            Some(Action::UpdateDatabase) => "SEL:run ",
+            Some(Action::UpdateDatabase | Action::Power(_)) => "SEL:run ",
+            Some(Action::Bluetooth(..)) => "SEL:switch ",
+            Some(Action::Back) => "SEL:back ",
+            Some(Action::Info) => "",
             Some(Action::Add(_) | Action::AddFile(_)) => "SEL:add ",
             None => "",
         };

@@ -348,6 +348,43 @@ impl Bluetooth {
     }
 }
 
+/// The box's own Bluetooth controller, for the settings menu.
+pub struct Adapter {
+    pub path: String,
+    pub alias: String,
+    pub powered: bool,
+    pub discoverable: bool,
+}
+
+const ADAPTER: &str = "org.bluez.Adapter1";
+
+/// The first controller and its state (a short-lived connection: the menu
+/// asks rarely).
+pub fn adapter() -> Option<Adapter> {
+    type Objects = HashMap<OwnedObjectPath, HashMap<String, Props>>;
+    let conn = Connection::system().ok()?;
+    let reply = conn.call_method(Some("org.bluez"), "/",
+        Some("org.freedesktop.DBus.ObjectManager"), "GetManagedObjects", &()).ok()?;
+    let objects = reply.body().deserialize::<Objects>().ok()?;
+    let (path, props) = objects.into_iter()
+        .find_map(|(path, mut ifaces)| ifaces.remove(ADAPTER).map(|p| (path, p)))?;
+    let flag = |key: &str| props.get(key).is_some_and(|v| matches!(**v, Value::Bool(true)));
+    Some(Adapter {
+        path: path.to_string(),
+        alias: props.get("Alias").and_then(|v| as_str(v).map(str::to_string)).unwrap_or_default(),
+        powered: flag("Powered"),
+        discoverable: flag("Discoverable"),
+    })
+}
+
+/// Sets Powered or Discoverable; returns false on failure.
+pub fn set_adapter(path: &str, prop: &str, on: bool) -> bool {
+    Connection::system().is_ok_and(|conn| {
+        conn.call_method(Some("org.bluez"), path, Some("org.freedesktop.DBus.Properties"), "Set",
+            &(ADAPTER, prop, Value::Bool(on))).is_ok()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

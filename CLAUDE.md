@@ -23,9 +23,10 @@ Garder le style et la densité de commentaires du code existant.
   - `src/profile.rs` : les deux profils d'écran (SSD1309, SSD1322) et leur chargement ;
   - `src/app.rs` et `main.rs` : démarrage, commandes, boucle principale, animation CRT, veille, extinction ;
   - `src/display/` : le `Canvas` commun en niveaux 0 à 15 et les pilotes `ssd1309.rs` et `ssd1322.rs` ;
-  - `src/viz/` : le trait `Viz` et l'éditeur de playlist commun (`editor.rs`, une `Layout` par écran : menu Queue / Artists / Albums / Folders / Playlists / Update database, pile d'écrans dont chaque ligne porte son action, toujours rouvert sur le menu), puis les familles `ssd1309/` (les 6 de rAV) et `ssd1322/` (14, dont 2 cachées) ;
+  - `src/viz/` : le trait `Viz` et l'éditeur de playlist commun (`editor.rs`, une `Layout` par écran : deux menus : Library sur le bouton de la molette (Queue / Artists / Albums / Folders / Playlists / Update database) et Settings sur l'appui long d'1 s sur PLAY (Network / Bluetooth / Restart / Power off, ces deux derniers avec confirmation) ; pile d'écrans dont chaque ligne porte son action, toujours rouverte sur le menu demandé), puis les familles `ssd1309/` (les 6 de rAV) et `ssd1322/` (14, dont 2 cachées) ;
   - `src/audio.rs` et `bands.rs` : capture PipeWire, FFT et tables de bandes ;
-  - `src/mpd.rs`, `bluetooth.rs` (zbus), `font.rs` (FreeType), `ui.rs`, `transition.rs`, `hw.rs` (gpiocdev, spidev) et `rotary.rs` ;
+  - `src/system.rs` : nom d'hôte, interfaces réseau (getifaddrs) et Wi-Fi (`nmcli`, facultatif) pour le menu Settings ;
+  - `src/mpd.rs`, `bluetooth.rs` (zbus, y compris `Powered`/`Discoverable` de l'adaptateur), `font.rs` (FreeType), `ui.rs`, `transition.rs`, `hw.rs` (gpiocdev, spidev) et `rotary.rs` ;
   - `src/render_test.rs` : le test de rendu hors ligne.
 - `packaging/build-deb.sh` : compile `rust/` et construit le `.deb`.
 - `packaging/root/` : arborescence installée telle quelle. Tout ce qui est sous `etc/` devient un conffile.
@@ -61,7 +62,7 @@ Garder le style et la densité de commentaires du code existant.
 - **Fichiers fournis** :
   - le binaire `/usr/bin/rav-visualizer` et l'unité `audio-visualizer.service`, qui tourne **sous l'utilisateur `mpd`** avec `SupplementaryGroups=gpio spi` et `ProtectHome=read-only` ;
   - `/etc/rav-audio/visualizer.conf` (type d'écran) et `/etc/rav-audio/mpd.conf`, ce dernier choisi via `MPDCONF` dans un drop-in de `mpd.service` (`/etc/mpd.conf` n'est pas utilisé). MPD y écoute sur toutes les interfaces (`bind_to_address "::"`) : les deux boîtiers sont pilotés par des clients MPD du réseau, ne pas revenir à `localhost` ;
-  - `/usr/share/polkit-1/rules.d/50-rav-audio.rules` : il autorise `mpd` à éteindre la machine (appui long sur PLAY), et rien d'autre ;
+  - `/usr/share/polkit-1/rules.d/50-rav-audio.rules` : il autorise `mpd` à éteindre et à redémarrer la machine (menu Settings), et rien d'autre ;
   - les unités `bt-agent` et `bt-discoverable` ;
   - la police `trixel-square.ttf`. **FreePixel n'est pas fournie**, faute de licence vérifiée : sur le boîtier SSD1322, la copier à la main dans `/usr/local/share/rav-audio/`, sinon c'est DejaVu qui s'affiche.
 - **Configuration PipeWire et WirePlumber** :
@@ -128,11 +129,13 @@ Garder le style et la densité de commentaires du code existant.
 - **2026-10-17** : 2.0.5, le graphe PipeWire suit la fréquence de la source au lieu de tout rééchantillonner à 44100 Hz ; les changements de fréquence passent sans problème sur la sortie S/PDIF du SalonRPI.
 - **2026-10-17** : 2.0.6, entrées Artists et Update database dans le menu de l'éditeur.
 - **2026-10-17** : 2.0.7, overlay de volume du SSD1309 au style du SSD1322 (`ui::VolumeBar` commun) ; la transition Matrix recouvre l'ancienne visualisation et découvre la nouvelle en 750 ms.
+- **2026-10-19** : 2.0.8, menu Settings sur l'appui long d'1 s sur PLAY (réseau, Bluetooth On/Off et visibilité, redémarrage et extinction avec confirmation), à la place de l'extinction directe par 3 s d'appui.
 
 ## Non vérifié ou à faire
 
 - La désinstallation du paquet n'a jamais été testée.
 - **BureauRPI** : `/etc/wireplumber/wireplumber.conf.d/60-local-headroom.conf` (hors paquet) garde `api.alsa.headroom = 8192`, environ 186 ms d'avance pour la synchro, en attendant de nouvelles mesures. Décider ensuite de l'intégrer au paquet ou de le retirer.
 - Le nom du nœud du jack intégré, `alsa_output.platform-bcm2835_audio.*`, n'a pas été vérifié sur du matériel.
-- L'extinction par appui long sur PLAY n'a pas été essayée en vrai : seule la règle polkit a été vérifiée.
+- L'extinction et le redémarrage depuis le menu Settings n'ont pas été essayés en vrai : seule la règle polkit a été vérifiée (pour l'extinction).
+- Le réglage Bluetooth du menu Settings (On/Off, Visible) dure jusqu'au redémarrage : `AutoEnable` et `bt-discoverable` le remettent à On et visible au boot.
 - `music_directory` dans `/etc/rav-audio/mpd.conf` est propre au SalonRPI : il pointe vers `/media/icarus3/music`.

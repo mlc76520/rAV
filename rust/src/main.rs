@@ -15,6 +15,7 @@ mod mpd;
 mod profile;
 mod rotary;
 mod snapshot;
+mod system;
 mod transition;
 mod ui;
 mod viz;

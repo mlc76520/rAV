@@ -11,7 +11,8 @@ A Debian package sets up the whole stack: MPD, PipeWire, Bluetooth and the displ
 
 ### Player
 
-- **Front panel for MPD**: play/pause, next/previous and volume from the knob and buttons; hold PLAY to power the box off
+- **Front panel for MPD**: play/pause, next/previous and volume from the knob and buttons
+- **Settings menu** (hold PLAY): network status (host name, wired or Wi-Fi, IP address), Bluetooth on/off and visibility, restart and power off (each confirmed). The Bluetooth switches last until the next boot
 - **Library browser** on the panels: the queue (jump to a song), artists, albums, folders and stored playlists, played at once or added to the queue, plus a database update
 - **Network player**: MPD listens on the network, so any MPD client (phone app, desktop) can drive the box too
 - **No resampling**: the PipeWire graph follows the source rate (44.1 to 192 kHz), towards an I2S DAC (HifiBerry...) or the onboard jack
@@ -112,7 +113,7 @@ The Next button used to be on GPIO 9, but that is also SPI0 MISO, which the kern
 | Rotary knob | Volume ±2 (MPD, or the phone's own volume while it is the active source) / scroll list (editor) |
 | Rotary push | Open the Playlist Editor menu / confirm selection |
 | Viz button | Next visualization / one level up in the editor (SSD1322: hold to visit the hidden modes) |
-| Play button | Play / pause (MPD or phone); **hold 3 s to power the box off** |
+| Play button | Play / pause (MPD or phone); **hold 1 s for the settings menu** (network, Bluetooth, restart, power off) |
 | Next / Prev buttons | Skip track (MPD or phone) |
 
 ---

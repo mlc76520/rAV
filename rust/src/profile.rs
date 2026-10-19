@@ -51,8 +51,9 @@ pub struct Pins {
 pub struct Features {
     /// "Matrix rain" when switching visualizations.
     pub transition: bool,
-    /// Holding PLAY 3 s powers the system off.
-    pub poweroff: bool,
+    /// Holding PLAY opens the settings menu (network, Bluetooth, restart,
+    /// power off); PLAY then acts on release.
+    pub settings: bool,
     /// Holding VIZ tours the hidden visualizations (VIZ then acts on
     /// release instead of press).
     pub hidden_tier: bool,
@@ -118,7 +119,7 @@ pub static SSD1309: Profile = Profile {
     bands_bass_end: BANDS64_BASS_END,
     bands_mid_end: BANDS64_MID_END,
     knob_up: 1,
-    features: Features { transition: true, poweroff: true, hidden_tier: false },
+    features: Features { transition: true, settings: true, hidden_tier: false },
     vizs: viz::ssd1309::all,
     volume_overlay: viz::ssd1309::volume_overlay,
 };
@@ -157,7 +158,7 @@ pub static SSD1322: Profile = Profile {
     bands_bass_end: BANDS120_BASS_END,
     bands_mid_end: BANDS120_MID_END,
     knob_up: -1, // clockwise counts negative on this encoder
-    features: Features { transition: true, poweroff: true, hidden_tier: true },
+    features: Features { transition: true, settings: true, hidden_tier: true },
     vizs: viz::ssd1322::all,
     volume_overlay: viz::ssd1322::volume_bar,
 };

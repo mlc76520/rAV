@@ -1,8 +1,11 @@
-// rav-audio: holding PLAY powers the box off. The visualizer runs as user
-// mpd, outside any login session, so logind asks polkit; allow just that.
+// rav-audio: the settings menu (hold PLAY) restarts or powers the box off.
+// The visualizer runs as user mpd, outside any login session, so logind
+// asks polkit; allow just that.
 polkit.addRule(function(action, subject) {
     if ((action.id == "org.freedesktop.login1.power-off" ||
-         action.id == "org.freedesktop.login1.power-off-multiple-sessions") &&
+         action.id == "org.freedesktop.login1.power-off-multiple-sessions" ||
+         action.id == "org.freedesktop.login1.reboot" ||
+         action.id == "org.freedesktop.login1.reboot-multiple-sessions") &&
         subject.user == "mpd") {
         return polkit.Result.YES;
     }

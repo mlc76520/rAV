@@ -11,6 +11,7 @@ use crate::profile::{self, Profile};
 use crate::rotary::Rotary;
 use crate::snapshot::FrameSnapshot;
 use crate::transition::Transition;
+use crate::viz::editor::{Outcome, Power};
 use crate::viz::{Frame, Tier, Viz};
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -25,10 +26,9 @@ const FRAME: Duration = Duration::from_millis(16);
 const OVERLAY_DURATION: Duration = Duration::from_millis(1500);
 // Transport buttons act once per press, with a lockout against bounce.
 const TRANSPORT_LOCKOUT: Duration = Duration::from_millis(200);
-// PLAY held >= PLAY_LONG powers the system off; a press shorter than
-// PLAY_SHORT (acted on release) is play/pause.
-const PLAY_SHORT: Duration = Duration::from_millis(1000);
-const PLAY_LONG: Duration = Duration::from_millis(3000);
+// PLAY held >= PLAY_LONG opens the settings menu; a shorter press (acted on
+// release) is play/pause.
+const PLAY_LONG: Duration = Duration::from_millis(1000);
 // VIZ held >= VIZ_LONG tours the hidden tier; shorter = next visualization.
 const VIZ_LONG: Duration = Duration::from_millis(700);
 const AUTO_CYCLE_IDLE: Duration = Duration::from_secs(30);
@@ -222,12 +222,17 @@ impl App {
         self.vizs[self.current].render(&mut frame, &self.snap);
     }
 
-    fn poweroff(&mut self) {
+    /// Restart or power off, confirmed in the settings menu.
+    fn power(&mut self, p: Power) {
         if self.powering_off {
             return;
         }
         self.powering_off = true;
-        println!("PLAY long-press -> system poweroff");
+        let verb = match p {
+            Power::Restart => "reboot",
+            Power::Off => "poweroff",
+        };
+        println!("Settings -> system {verb}");
         if !self.sleeping {
             self.animate_crt(false);
         }
@@ -235,8 +240,8 @@ impl App {
         self.right.sleep();
         self.led.set(false);
         // systemd stops this service (SIGTERM -> clean exit) before halting.
-        if std::process::Command::new("systemctl").args(["poweroff", "--no-wall"]).spawn().is_err() {
-            println!("poweroff request failed");
+        if std::process::Command::new("systemctl").args([verb, "--no-wall"]).spawn().is_err() {
+            println!("{verb} request failed");
         }
     }
 
@@ -250,15 +255,20 @@ impl App {
         let fw_pressed = b.fw && !prev.fw;
         let rw_pressed = b.rw && !prev.rw;
 
-        // PLAY: with poweroff, a long hold powers off (editor included) and
+        // PLAY: with settings, a long hold opens them (editor included) and
         // play/pause acts on a short release; otherwise on press.
-        let play_pressed = if features.poweroff {
+        let play_pressed = if features.settings {
             let (release, long) = self.play.update(b.play, now, PLAY_LONG);
             if long {
-                self.poweroff();
+                if let Some(e) = self.editor {
+                    if let Some(ed) = self.vizs[e].as_editor() {
+                        ed.open_settings();
+                    }
+                    self.switch_to(e, "Opening settings (PLAY long)");
+                }
                 return;
             }
-            release.is_some_and(|held| held < PLAY_SHORT)
+            release.is_some()
         } else {
             b.play && !prev.play
         };
@@ -287,15 +297,17 @@ impl App {
 
         if Some(self.current) == self.editor {
             let editor = self.vizs[self.current].as_editor().expect("editor index");
-            let mut want_exit = false;
+            // Turning only moves the cursor
             for _ in 0..rot.abs() {
-                want_exit |= editor.handle_input(rot < 0, rot > 0, false, false);
+                editor.handle_input(rot < 0, rot > 0, false, false);
             }
-            if rot_btn || viz_pressed {
-                want_exit |= editor.handle_input(false, false, rot_btn, viz_pressed);
+            if !(rot_btn || viz_pressed) {
+                return;
             }
-            if want_exit {
-                self.switch_to(self.next_viz(self.current), "Leaving editor");
+            match editor.handle_input(false, false, rot_btn, viz_pressed) {
+                Outcome::Stay => {}
+                Outcome::Exit => self.switch_to(self.next_viz(self.current), "Leaving editor"),
+                Outcome::Power(p) => self.power(p),
             }
             return;
         }
@@ -316,7 +328,7 @@ impl App {
         if rot_btn {
             if let Some(e) = self.editor {
                 if let Some(ed) = self.vizs[e].as_editor() {
-                    ed.on_activate();
+                    ed.open_library();
                 }
                 self.switch_to(e, "Opening editor (ROT_SW)");
             }
