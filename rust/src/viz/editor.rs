@@ -85,7 +85,8 @@ impl Source {
             Source::Playlists => "PLAYLISTS".into(),
             Source::Contents(Collection::Folder(p)) if p.is_empty() => "FOLDERS".into(),
             Source::Contents(Collection::Folder(p)) => mpd::basename(p).into(),
-            Source::Contents(Collection::Album(n, _) | Collection::Artist(n) | Collection::Playlist(n)) => n.clone(),
+            Source::Contents(Collection::Album(n, _) | Collection::Artist(n)) => n.clone(),
+            Source::Contents(Collection::Playlist(n)) => mpd::playlist_name(n).into(),
             Source::Network => "NETWORK".into(),
             Source::Bluetooth => "BLUETOOTH".into(),
             Source::Confirm(Power::Restart) => "RESTART?".into(),
@@ -133,6 +134,11 @@ fn track_label(t: &TrackInfo) -> String {
     if t.track_num.is_empty() { t.title.clone() } else { format!("{}. {}", t.track_num, t.title) }
 }
 
+fn playlist_row(name: String) -> Row {
+    let label = mpd::playlist_name(&name).to_string();
+    Row::new(label, Action::Open(Source::Contents(Collection::Playlist(name))))
+}
+
 /// Runs on the worker thread.
 fn list(mpd: &MpdClient, source: &Source) -> Listing {
     let mut cursor = Some(0);
@@ -150,7 +156,7 @@ fn list(mpd: &MpdClient, source: &Source) -> Listing {
             .map(|a| Row::new(a.clone(), Action::Open(Source::Contents(Collection::Album(a, None)))))
             .collect(),
         Source::Playlists => mpd.playlists().into_iter()
-            .map(|n| Row::new(n.clone(), Action::Open(Source::Contents(Collection::Playlist(n)))))
+            .map(playlist_row)
             .collect(),
         Source::Contents(c) => {
             // The whole library is not offered as one block
@@ -179,6 +185,7 @@ fn list(mpd: &MpdClient, source: &Source) -> Listing {
             rows.extend(mpd.contents(c).into_iter().map(|e| match e {
                 Entry::Dir(d) => Row::new(format!("{}/", mpd::basename(&d)), Action::Open(Source::Contents(Collection::Folder(d)))),
                 Entry::Song(t) => Row::new(track_label(&t), Action::AddFile(t.file)),
+                Entry::Playlist(p) => playlist_row(p),
             }));
             rows
         }

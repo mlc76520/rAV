@@ -111,6 +111,7 @@ Garder le style et la densité de commentaires du code existant.
 - **`bt-discoverable`** : il peut partir avant que bluetoothd ait exporté le contrôleur, d'où `Restart=on-failure`.
 - **Scripts de maintenance** (`set -e`) : utiliser des `if`, pas `[ test ] && cmd` en fin de boucle ou de bloc.
 - **Pi 3 : compiler avec `-j 1`** (voir plus haut).
+- **Bibliothèque en NFS, lue par MPD lui-même** (`nfs://`, libnfs), plus de montage CIFS dans le fstab. Mettre **l'adresse IPv4** d'icarus3 : `icarus3` se résout d'abord en IPv6, que l'export (`192.168.0.0/24`) refuse (`MNT3ERR_ACCES`). L'export doit avoir `insecure`, car MPD ne se connecte pas depuis un port privilégié. `playlist_directory` doit rester local (`/var/lib/mpd/playlists`) ; les radios partagées sont dans le dossier `playlists/` de la bibliothèque, et le menu Playlists les liste avec les playlists enregistrées.
 
 ## Choix de conception : latence et rendu
 
@@ -130,6 +131,7 @@ Garder le style et la densité de commentaires du code existant.
 - **2026-10-17** : 2.0.6, entrées Artists et Update database dans le menu de l'éditeur.
 - **2026-10-17** : 2.0.7, overlay de volume du SSD1309 au style du SSD1322 (`ui::VolumeBar` commun) ; la transition Matrix recouvre l'ancienne visualisation et découvre la nouvelle en 750 ms.
 - **2026-10-19** : 2.0.8, menu Settings sur l'appui long d'1 s sur PLAY (réseau, Bluetooth On/Off et visibilité, redémarrage et extinction avec confirmation), à la place de l'extinction directe par 3 s d'appui.
+- **2026-10-19** : 2.0.9, bibliothèque lue en NFS par MPD (`nfs://192.168.0.15/media/storage8To/Music`) au lieu du partage Samba monté en CIFS. Les lignes CIFS ont été retirées du fstab des deux boîtiers (sauvegarde `/etc/fstab.bak-cifs-2026-10-19`) ; Playlists et Folders montrent les playlists du dossier `playlists/` de la bibliothèque.
 
 ## Non vérifié ou à faire
 
@@ -138,4 +140,4 @@ Garder le style et la densité de commentaires du code existant.
 - Le nom du nœud du jack intégré, `alsa_output.platform-bcm2835_audio.*`, n'a pas été vérifié sur du matériel.
 - L'extinction et le redémarrage depuis le menu Settings n'ont pas été essayés en vrai : seules les règles polkit ont été vérifiées sous `mpd` (`pkcheck`, extinction et redémarrage, sur les deux boîtiers).
 - Le réglage Bluetooth du menu Settings (On/Off, Visible) dure jusqu'au redémarrage : `AutoEnable` et `bt-discoverable` le remettent à On et visible au boot.
-- `music_directory` dans `/etc/rav-audio/mpd.conf` est propre au SalonRPI : il pointe vers `/media/icarus3/music`.
+- `music_directory` dans `/etc/rav-audio/mpd.conf` est propre à cette maison : `nfs://192.168.0.15/media/storage8To/Music`, l'export NFS en lecture seule d'icarus3 (serveur Ubuntu à IP fixe).

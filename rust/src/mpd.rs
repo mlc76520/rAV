@@ -111,7 +111,13 @@ pub struct TrackInfo {
 pub enum Entry {
     Dir(String),
     Song(TrackInfo),
+    /// A playlist file in the library (path with its extension).
+    Playlist(String),
 }
+
+/// Library folder of playlists shared by the boxes (web radios...); they
+/// are listed with the stored ones.
+const LIBRARY_PLAYLISTS: &str = "playlists";
 
 /// A group of songs the editor can open, play or queue as a whole.
 #[derive(Clone)]
@@ -159,8 +165,18 @@ pub fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-/// Songs (file, then their tags) and directories from a listing; anything
-/// else (stored playlists in lsinfo) is skipped.
+/// How a playlist reads in a list: a library file without its folder and
+/// extension, a stored playlist as is.
+pub fn playlist_name(name: &str) -> &str {
+    let base = basename(name);
+    match base.rsplit_once('.') {
+        Some((stem, ext)) if ["m3u", "m3u8", "pls", "xspf", "asx"].contains(&ext.to_ascii_lowercase().as_str()) => stem,
+        _ => base,
+    }
+}
+
+/// Songs (file, then their tags), directories and playlist files from a
+/// listing.
 fn parse_entries(pairs: Pairs) -> Vec<Entry> {
     let mut entries = Vec::new();
     let mut in_song = false; // tags that follow belong to the last song
@@ -170,7 +186,10 @@ fn parse_entries(pairs: Pairs) -> Vec<Entry> {
                 entries.push(Entry::Dir(v));
                 in_song = false;
             }
-            "playlist" => in_song = false,
+            "playlist" => {
+                entries.push(Entry::Playlist(v));
+                in_song = false;
+            }
             "file" => {
                 let title = basename(&v).to_string();
                 entries.push(Entry::Song(TrackInfo { title, file: v, track_num: String::new() }));
@@ -423,8 +442,12 @@ impl MpdClient {
         self.names(&format!("list album artist {}", quote(artist)), "Album")
     }
 
+    /// Stored playlists, then those of the library's playlists folder (by
+    /// path, which load and listplaylistinfo accept too).
     pub fn playlists(&self) -> Vec<String> {
-        self.names("listplaylists", "playlist")
+        let mut names = self.names("listplaylists", "playlist");
+        names.extend(self.names(&format!("lsinfo {}", quote(LIBRARY_PLAYLISTS)), "playlist"));
+        names
     }
 
     /// Rescans music_directory in the background.

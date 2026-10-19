@@ -13,7 +13,7 @@ A Debian package sets up the whole stack: MPD, PipeWire, Bluetooth and the displ
 
 - **Front panel for MPD**: play/pause, next/previous and volume from the knob and buttons
 - **Settings menu** (hold PLAY): network status (host name, wired or Wi-Fi, IP address), Bluetooth on/off and visibility, restart and power off (each confirmed). The Bluetooth switches last until the next boot
-- **Library browser** on the panels: the queue (jump to a song), artists, albums, folders and stored playlists, played at once or added to the queue, plus a database update
+- **Library browser** on the panels: the queue (jump to a song), artists, albums, folders and playlists (stored ones, and those in the library's `playlists/` folder), played at once or added to the queue, plus a database update
 - **Network player**: MPD listens on the network, so any MPD client (phone app, desktop) can drive the box too
 - **No resampling**: the PipeWire graph follows the source rate (44.1 to 192 kHz), towards an I2S DAC (HifiBerry...) or the onboard jack
 
@@ -135,7 +135,7 @@ The package:
 
 Then:
 - choose the panel type with `display = ssd1309` or `ssd1322` in `/etc/rav-audio/visualizer.conf`;
-- set your `music_directory` in `/etc/rav-audio/mpd.conf`;
+- set your `music_directory` in `/etc/rav-audio/mpd.conf`: a local path, or a share MPD reads by itself such as `nfs://server/path` (read-only NFS export; add `insecure`, MPD does not connect from a privileged port). Playlist files in the library's `playlists/` folder (web radios...) show up with the stored playlists;
 - make sure `config.txt` has `dtparam=spi=on` and an audio output (`dtoverlay=hifiberry-…` or `dtparam=audio=on`).
 
 The SSD1322 layouts use the FreePixel font, which is not shipped: copy `FreePixel.ttf` to `/usr/local/share/rav-audio/`, otherwise DejaVu Sans is used. The SSD1309 font (`trixel-square.ttf`) is included. See `packaging/root/usr/share/doc/rav-audio/README` for exactly what the package sets up.
