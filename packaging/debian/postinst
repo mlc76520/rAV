@@ -63,6 +63,15 @@ LimitNICE=-19
 LimitMEMLOCK=infinity
 EOT
 
+    # The library location is the user's: created once, never overwritten
+    if [ ! -e /etc/rav-audio/mpd_local.conf ]; then
+        cat > /etc/rav-audio/mpd_local.conf <<EOT
+# Local MPD settings for rav-audio, included by /etc/rav-audio/mpd.conf
+# (see its comments). Kept on upgrades, removed on purge.
+music_directory		"/var/lib/mpd/music"
+EOT
+    fi
+
     # bluealsa would compete with PipeWire for the A2DP endpoints
     for s in bluealsa-aplay.service bluealsa.service; do
         if systemctl is-enabled --quiet "$s" 2>/dev/null; then

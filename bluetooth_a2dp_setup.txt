@@ -157,7 +157,7 @@ STEP 9: TEST CONNECTION
 ================================================================================
 
 1. From your phone, search for Bluetooth devices
-2. You should see your Pi's hostname (e.g., "BureauRPI")
+2. You should see your Pi's hostname (e.g., "raspberrypi")
 3. Pair and connect - no PIN should be required
 4. Play audio from your phone
 

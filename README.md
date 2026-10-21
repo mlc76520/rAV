@@ -135,7 +135,7 @@ The package:
 
 Then:
 - choose the panel type with `display = ssd1309` or `ssd1322` in `/etc/rav-audio/visualizer.conf`;
-- set your `music_directory` in `/etc/rav-audio/mpd.conf`: a local path, or a share MPD reads by itself such as `nfs://server/path` (read-only NFS export; add `insecure`, MPD does not connect from a privileged port). Playlist files in the library's `playlists/` folder (web radios...) show up with the stored playlists;
+- set your `music_directory` in `/etc/rav-audio/mpd_local.conf` (created on first install, kept on upgrades; default `/var/lib/mpd/music`): a local path, or a share MPD reads by itself such as `nfs://server/path` (read-only NFS export; add `insecure`, MPD does not connect from a privileged port). Playlist files in the library's `playlists/` folder (web radios...) show up with the stored playlists;
 - make sure `config.txt` has `dtparam=spi=on` and an audio output (`dtoverlay=hifiberry-…` or `dtparam=audio=on`).
 
 The SSD1322 layouts use the FreePixel font, which is not shipped: copy `FreePixel.ttf` to `/usr/local/share/rav-audio/`, otherwise DejaVu Sans is used. The SSD1309 font (`trixel-square.ttf`) is included. See `packaging/root/usr/share/doc/rav-audio/README` for exactly what the package sets up.

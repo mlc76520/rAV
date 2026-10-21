@@ -25,7 +25,7 @@ remove|purge)
         systemctl try-restart mpd.service || true
     fi
     rm -f "$STATE"/*.was-enabled
-    if [ "$1" = purge ]; then rm -rf "$STATE"; fi
+    if [ "$1" = purge ]; then rm -rf "$STATE" /etc/rav-audio/mpd_local.conf; fi
     ;;
 esac
 

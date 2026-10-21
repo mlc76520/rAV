@@ -1,6 +1,6 @@
 //! Display profiles: everything that differs between the two builds of the
-//! front panel (SSD1309 128x64 mono on the SalonRPI Pi 3, SSD1322 240x128
-//! greyscale on the Pi 5). The rest of the program is shared.
+//! front panel (SSD1309 128x64 mono, e.g. on a Pi 3; SSD1322 240x128
+//! greyscale, e.g. on a Pi 5). The rest of the program is shared.
 //!
 //! The profile is chosen at startup: RAV_DISPLAY in the environment, else
 //! `display = ...` in /etc/rav-audio/visualizer.conf, else SSD1309.

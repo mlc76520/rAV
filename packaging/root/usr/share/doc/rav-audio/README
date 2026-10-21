@@ -18,8 +18,9 @@ when its overlay is enabled, else the onboard headphone jack, then HDMI.
 
 Shipped (conffiles, kept across upgrades):
   /etc/rav-audio/visualizer.conf               panel type
-  /etc/rav-audio/mpd.conf                      MPD config (MPDCONF), local
-                                               additions in mpd_local.conf
+  /etc/rav-audio/mpd.conf                      MPD config (MPDCONF)
+  /etc/rav-audio/mpd_local.conf                music_directory and local
+                                               additions (created once, kept)
   /etc/pipewire/pipewire.conf.d/10-rav-audio.conf
   /etc/wireplumber/wireplumber.conf.d/50-rav-audio.conf
 

@@ -9,3 +9,6 @@ visualizer.*
 
 # Unused, third-party licence unknown
 DS-DIGI.TTF
+
+# Local, personal notes for Claude Code (not public)
+CLAUDE.local.md
