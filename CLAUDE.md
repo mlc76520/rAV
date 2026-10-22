@@ -137,7 +137,8 @@ par git, qui décrit l'installation réelle (boîtiers, serveur, réglages locau
 - **2026-10-19** : 2.0.8, menu Settings sur l'appui long d'1 s sur PLAY (réseau, Bluetooth On/Off et visibilité, redémarrage et extinction avec confirmation), à la place de l'extinction directe par 3 s d'appui.
 - **2026-10-19** : 2.0.9, bibliothèque lue en NFS par MPD au lieu d'un partage Samba monté en CIFS ; Playlists et Folders montrent les playlists du dossier `playlists/` de la bibliothèque.
 - **2026-10-22** : 2.0.10, plus aucune référence personnelle dans le dépôt : `music_directory` passe dans `mpd_local.conf`, les réglages de la maison dans `CLAUDE.local.md`.
-- **2026-10-22** : 2.0.11, Track Info d'un flux sans fin (radio) : barre de progression à hachures qui défilent, « mm:ss / LIVE » et icône de poste radio (`ui::progress_bar`, `ui::time_text`, `ui::radio_icon`, 16×10 sur SSD1309, 32×20 en niveaux de gris sur SSD1322).
+- **2026-10-22** : 2.0.11, Track Info d'un flux sans fin (radio) : barre de progression à hachures qui défilent, « mm:ss / LIVE » et icône de poste radio (`ui::progress_bar`, `ui::time_text`).
+- **2026-10-22** : 2.0.12, icône de la source sur Track Info : disque (bibliothèque), poste radio (flux sans fin) ou Bluetooth (`ui::source_icon`, 16×10 sur SSD1309, 32×20 en niveaux de gris sur SSD1322).
 
 ## Non vérifié ou à faire
 

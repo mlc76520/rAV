@@ -1,5 +1,5 @@
 //! Drawing helpers shared by both panel families: ordered dithering, the
-//! volume bar, the progress bar, the radio icon and the scrolling track
+//! volume bar, the progress bar, the source icons and the scrolling track
 //! title.
 
 use crate::display::Canvas;
@@ -47,9 +47,20 @@ pub fn progress_bar(cv: &mut Canvas, (x, y, w, h): (i32, i32, i32, i32), inset: 
     }
 }
 
-/// Radio set shown with a stream: antenna, speaker grille, dial and knobs;
-/// '#' lit, '+' half grey (smoothing and grille on the greyscale panel).
-const RADIO_ICON_SMALL: [&str; 10] = [
+/// What is playing, shown by an icon on Track Info.
+#[derive(Clone, Copy)]
+pub enum SourceIcon {
+    /// A library track
+    Disc,
+    /// A stream with no end (web radio)
+    Radio,
+    /// A phone over Bluetooth
+    Bluetooth,
+}
+
+// Icons, 16x10 (mono panel) and 32x20 (greyscale): '#' lit, '+' half grey,
+// '-' faint (smoothing, grille, grooves; only '#' in the mono ones).
+const RADIO_SMALL: [&str; 10] = [
     "...........#....",
     "..........#.....",
     ".##############.",
@@ -62,7 +73,7 @@ const RADIO_ICON_SMALL: [&str; 10] = [
     ".##############.",
 ];
 
-const RADIO_ICON_LARGE: [&str; 20] = [
+const RADIO_LARGE: [&str; 20] = [
     "..........................+#....",
     ".........................#.+....",
     "........................#.......",
@@ -85,14 +96,94 @@ const RADIO_ICON_LARGE: [&str; 20] = [
     ".+############################+.",
 ];
 
-/// The radio icon, top-left at (x, y): 16x10 (mono panel) or 32x20.
-pub fn radio_icon(cv: &mut Canvas, x: i32, y: i32, large: bool) {
-    let rows: &[&str] = if large { &RADIO_ICON_LARGE } else { &RADIO_ICON_SMALL };
+const DISC_SMALL: [&str; 10] = [
+    "...####.........",
+    ".##....##.......",
+    ".#...##.#.......",
+    "#......#.#......",
+    "#...##.#.#......",
+    "#...##...#......",
+    "#........#......",
+    ".#......#.......",
+    ".##....##.......",
+    "...####.........",
+];
+
+const DISC_LARGE: [&str; 20] = [
+    ".......######...................",
+    ".....##......##.................",
+    "...##..--..+++.##...............",
+    "..##.-..---+++++##..............",
+    "..#.-.-..--++++++#..............",
+    ".#.-.-.-...++++++.#.............",
+    ".#..-....++..+++..#.............",
+    "#.-..-.++++++.-..-.#............",
+    "#.--...++++++...--.#............",
+    "#..--.+++..+++.--..#............",
+    "#..--.+++..+++.--..#............",
+    "#.--...++++++...--.#............",
+    "#.-..-.++++++.-..-.#............",
+    ".#..-....++....-..#.............",
+    ".#.-.-.-....-.-.-.#.............",
+    "..#.-.-..--..-.-.#..............",
+    "..##.-..----..-.##..............",
+    "...##..--..--..##...............",
+    ".....##......##.................",
+    ".......######...................",
+];
+
+const BLUETOOTH_SMALL: [&str; 10] = [
+    "...#............",
+    "...##...........",
+    ".#.#.#..........",
+    "..###...........",
+    "...#............",
+    "...#............",
+    "..###...........",
+    ".#.#.#..........",
+    "...##...........",
+    "...#............",
+];
+
+const BLUETOOTH_LARGE: [&str; 20] = [
+"......##........................",
+    "......###.......................",
+    "......####......................",
+    "......##.##.....................",
+    "......##..##....................",
+    "......##...##...................",
+    ".##...##..##....................",
+    "..##..#####.....................",
+    "...######.......................",
+    ".....###........................",
+    ".....###........................",
+    "...######.......................",
+    "..##..#####.....................",
+    ".##...##..##....................",
+    "......##...##...................",
+    "......##..##....................",
+    "......##.##.....................",
+    "......####......................",
+    "......###.......................",
+    "......##........................",
+];
+
+/// The icon, top-left at (x, y): 16x10 on the mono panel, 32x20 if `large`.
+pub fn source_icon(cv: &mut Canvas, x: i32, y: i32, icon: SourceIcon, large: bool) {
+    let rows: &[&str] = match (icon, large) {
+        (SourceIcon::Disc, false) => &DISC_SMALL,
+        (SourceIcon::Disc, true) => &DISC_LARGE,
+        (SourceIcon::Radio, false) => &RADIO_SMALL,
+        (SourceIcon::Radio, true) => &RADIO_LARGE,
+        (SourceIcon::Bluetooth, false) => &BLUETOOTH_SMALL,
+        (SourceIcon::Bluetooth, true) => &BLUETOOTH_LARGE,
+    };
     for (r, line) in rows.iter().enumerate() {
         for (c, b) in line.bytes().enumerate() {
             let level = match b {
                 b'#' => 15,
                 b'+' => 8,
+                b'-' => 4,
                 _ => continue,
             };
             cv.pixel(x + c as i32, y + r as i32, level);

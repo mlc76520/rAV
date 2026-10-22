@@ -6,7 +6,7 @@ use crate::viz::{Frame, Viz};
 use crate::display::Canvas;
 use crate::font::{Fonts, Size};
 use crate::snapshot::{BANDS_SMALL, FrameSnapshot};
-use crate::ui::{self, TextScroller};
+use crate::ui::{self, SourceIcon, TextScroller};
 
 const MINI_FLOOR: i32 = 43;
 
@@ -40,6 +40,7 @@ impl TrackInfo {
             fonts.draw(cv, 1, y, "Source: Bluetooth", Size::Small, 15);
             y += 10;
             fonts.draw(cv, 1, y, "A2DP", Size::Small, 15);
+            ui::source_icon(cv, 1, y + 2, SourceIcon::Bluetooth, false);
             y += 20;
             if snap.total_s > 0 {
                 self.time_and_progress(cv, fonts, y, snap.elapsed_s, snap.total_s);
@@ -60,9 +61,8 @@ impl TrackInfo {
             fonts.draw(cv, 1, y, &format!("Bitrate: {}", t.bitrate), Size::Small, 15);
             y += 10;
             fonts.draw(cv, 1, y, &t.format, Size::Small, 15);
-            if snap.total_s == 0 {
-                ui::radio_icon(cv, 1, y + 2, false); // a stream: web radio
-            }
+            let icon = if snap.total_s == 0 { SourceIcon::Radio } else { SourceIcon::Disc };
+            ui::source_icon(cv, 1, y + 2, icon, false);
             y += 20;
             self.hatch_phase += snap.dt;
             self.time_and_progress(cv, fonts, y, snap.elapsed_s, snap.total_s);

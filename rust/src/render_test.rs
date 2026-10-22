@@ -160,6 +160,11 @@ fn render_profile(profile: &'static Profile) {
             viz.render(&mut Frame { left: &mut left, right: &mut right, fonts: &fonts }, &snap);
             save(profile, "Track Info stream", &left, &right);
             (snap.elapsed_s, snap.total_s) = (elapsed, total);
+            // A phone streaming over Bluetooth
+            snap.bt_streaming = true;
+            viz.render(&mut Frame { left: &mut left, right: &mut right, fonts: &fonts }, &snap);
+            save(profile, "Track Info bluetooth", &left, &right);
+            snap.bt_streaming = false;
         }
     }
     let mut cv = Canvas::new(profile.width, profile.height);

@@ -5,7 +5,7 @@ use crate::viz::{Frame, Viz};
 use crate::display::Canvas;
 use crate::font::{Fonts, Size};
 use crate::snapshot::FrameSnapshot;
-use crate::ui::{self, Titles};
+use crate::ui::{self, SourceIcon, Titles};
 
 pub struct TrackInfo {
     // Peak lines of the mini spectrum (y), starting at the floor.
@@ -39,6 +39,7 @@ impl Viz for TrackInfo {
             fonts.draw(cv, 1, y, "Source: Bluetooth", Size::Regular, 15);
             y += 20;
             fonts.draw(cv, 1, y, "A2DP", Size::Regular, 15);
+            ui::source_icon(cv, 1, y + 5, SourceIcon::Bluetooth, true);
             y += 60;
             if snap.total_s > 0 {
                 self.progress(cv, fonts, y, snap.elapsed_s, snap.total_s);
@@ -47,9 +48,8 @@ impl Viz for TrackInfo {
             fonts.draw(cv, 1, y, &format!("Bitrate: {}", snap.track.bitrate), Size::Regular, 15);
             y += 20;
             fonts.draw(cv, 1, y, &snap.track.format, Size::Regular, 15);
-            if snap.total_s == 0 {
-                ui::radio_icon(cv, 1, y + 5, true); // a stream: web radio
-            }
+            let icon = if snap.total_s == 0 { SourceIcon::Radio } else { SourceIcon::Disc };
+            ui::source_icon(cv, 1, y + 5, icon, true);
             y += 60;
             self.hatch_phase += snap.dt;
             self.progress(cv, fonts, y, snap.elapsed_s, snap.total_s);
