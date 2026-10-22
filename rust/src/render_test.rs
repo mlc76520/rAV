@@ -153,6 +153,14 @@ fn render_profile(profile: &'static Profile) {
             viz.render(&mut Frame { left: &mut left, right: &mut right, fonts: &fonts }, &snap);
         }
         save(profile, viz.name(), &left, &right);
+        // A web radio: no duration, the progress bar hatches instead
+        if viz.name() == "Track Info" {
+            let (elapsed, total) = (snap.elapsed_s, snap.total_s);
+            (snap.elapsed_s, snap.total_s) = (754, 0);
+            viz.render(&mut Frame { left: &mut left, right: &mut right, fonts: &fonts }, &snap);
+            save(profile, "Track Info stream", &left, &right);
+            (snap.elapsed_s, snap.total_s) = (elapsed, total);
+        }
     }
     let mut cv = Canvas::new(profile.width, profile.height);
     (profile.volume_overlay)(&mut cv, &fonts, 65);

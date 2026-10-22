@@ -6,13 +6,14 @@ use crate::viz::{Frame, Viz};
 use crate::display::Canvas;
 use crate::font::{Fonts, Size};
 use crate::snapshot::{BANDS_SMALL, FrameSnapshot};
-use crate::ui::TextScroller;
+use crate::ui::{self, TextScroller};
 
 const MINI_FLOOR: i32 = 43;
 
 pub struct TrackInfo {
     scroller: TextScroller,
     peaks: [Peaks<BANDS_SMALL>; 2],
+    hatch_phase: f32, // s, scrolls the stream hatching
 }
 
 impl TrackInfo {
@@ -20,20 +21,13 @@ impl TrackInfo {
         Self {
             scroller: TextScroller::new(Size::Small),
             peaks: [Peaks::new(MINI_FLOOR as f32), Peaks::new(MINI_FLOOR as f32)],
+            hatch_phase: 0.0,
         }
     }
 
-    fn time_and_progress(cv: &mut Canvas, fonts: &Fonts, y: i32, elapsed: u32, total: u32) {
-        let text = format!("{:02}:{:02} / {:02}:{:02}", elapsed / 60, elapsed % 60, total / 60, total % 60);
-        fonts.draw(cv, 1, y, &text, Size::Small, 15);
-        if total > 0 {
-            let (bw, by) = (126, y + 5);
-            let pw = (elapsed.min(total) as i32) * bw / total as i32;
-            cv.rect(1, by, bw, 5, false, 15);
-            if pw > 2 {
-                cv.rect(2, by + 1, pw - 2, 3, true, 15);
-            }
-        }
+    fn time_and_progress(&self, cv: &mut Canvas, fonts: &Fonts, y: i32, elapsed: u32, total: u32) {
+        fonts.draw(cv, 1, y, &ui::time_text(elapsed, total), Size::Small, 15);
+        ui::progress_bar(cv, (1, y + 5, 126, 5), 0, elapsed, total, self.hatch_phase);
     }
 
     fn details(&mut self, cv: &mut Canvas, fonts: &Fonts, snap: &FrameSnapshot) {
@@ -48,7 +42,7 @@ impl TrackInfo {
             fonts.draw(cv, 1, y, "A2DP", Size::Small, 15);
             y += 20;
             if snap.total_s > 0 {
-                Self::time_and_progress(cv, fonts, y, snap.elapsed_s, snap.total_s);
+                self.time_and_progress(cv, fonts, y, snap.elapsed_s, snap.total_s);
             }
         } else {
             let mut line = format!("{}. {}", t.track_number, t.title);
@@ -66,8 +60,12 @@ impl TrackInfo {
             fonts.draw(cv, 1, y, &format!("Bitrate: {}", t.bitrate), Size::Small, 15);
             y += 10;
             fonts.draw(cv, 1, y, &t.format, Size::Small, 15);
+            if snap.total_s == 0 {
+                ui::radio_icon(cv, 1, y + 2, false); // a stream: web radio
+            }
             y += 20;
-            Self::time_and_progress(cv, fonts, y, snap.elapsed_s, snap.total_s);
+            self.hatch_phase += snap.dt;
+            self.time_and_progress(cv, fonts, y, snap.elapsed_s, snap.total_s);
         }
     }
 

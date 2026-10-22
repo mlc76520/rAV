@@ -5,30 +5,23 @@ use crate::viz::{Frame, Viz};
 use crate::display::Canvas;
 use crate::font::{Fonts, Size};
 use crate::snapshot::FrameSnapshot;
-use crate::ui::Titles;
+use crate::ui::{self, Titles};
 
 pub struct TrackInfo {
     // Peak lines of the mini spectrum (y), starting at the floor.
     peaks: [[f32; 7]; 2],
     titles: Titles,
+    hatch_phase: f32, // s, scrolls the stream hatching
 }
 
 impl TrackInfo {
     pub fn new() -> Self {
-        Self { peaks: [[109.0; 7]; 2], titles: Titles::default() }
+        Self { peaks: [[109.0; 7]; 2], titles: Titles::default(), hatch_phase: 0.0 }
     }
 
-    fn progress(cv: &mut Canvas, fonts: &Fonts, y: i32, elapsed: u32, total: u32) {
-        let text = format!("{:02}:{:02} / {:02}:{:02}", elapsed / 60, elapsed % 60, total / 60, total % 60);
-        fonts.draw(cv, 1, y, &text, Size::Regular, 15);
-        if total > 0 {
-            let bw = 236;
-            let pw = (elapsed as i64 * bw as i64 / total as i64) as i32;
-            cv.rect(1, y + 5, bw, 8, false, 15);
-            if pw > 2 {
-                cv.rect(2, y + 7, pw - 2, 4, true, 15);
-            }
-        }
+    fn progress(&self, cv: &mut Canvas, fonts: &Fonts, y: i32, elapsed: u32, total: u32) {
+        fonts.draw(cv, 1, y, &ui::time_text(elapsed, total), Size::Regular, 15);
+        ui::progress_bar(cv, (1, y + 5, 236, 8), 1, elapsed, total, self.hatch_phase);
     }
 }
 
@@ -48,14 +41,18 @@ impl Viz for TrackInfo {
             fonts.draw(cv, 1, y, "A2DP", Size::Regular, 15);
             y += 60;
             if snap.total_s > 0 {
-                Self::progress(cv, fonts, y, snap.elapsed_s, snap.total_s);
+                self.progress(cv, fonts, y, snap.elapsed_s, snap.total_s);
             }
         } else {
             fonts.draw(cv, 1, y, &format!("Bitrate: {}", snap.track.bitrate), Size::Regular, 15);
             y += 20;
             fonts.draw(cv, 1, y, &snap.track.format, Size::Regular, 15);
+            if snap.total_s == 0 {
+                ui::radio_icon(cv, 1, y + 5, true); // a stream: web radio
+            }
             y += 60;
-            Self::progress(cv, fonts, y, snap.elapsed_s, snap.total_s);
+            self.hatch_phase += snap.dt;
+            self.progress(cv, fonts, y, snap.elapsed_s, snap.total_s);
         }
 
         // Mini spectrum, both channels, with falling peak lines.

@@ -1,5 +1,6 @@
 //! Drawing helpers shared by both panel families: ordered dithering, the
-//! volume bar and the scrolling track title.
+//! volume bar, the progress bar, the radio icon and the scrolling track
+//! title.
 
 use crate::display::Canvas;
 use crate::font::{Fonts, Size};
@@ -15,6 +16,94 @@ pub fn dither(lv: f32, x: i32, y: i32) -> u8 {
     let lo = lv as i32;
     let frac16 = ((lv - lo as f32) * 16.0) as i32;
     (lo + (frac16 > BAYER[(y & 3) as usize][(x & 3) as usize] as i32) as i32).min(15) as u8
+}
+
+/// Speed of the stream hatching, px/s.
+const HATCH_SPEED: f32 = 12.0;
+
+/// Progress bar inside a frame: filled up to elapsed/total, or, for a
+/// stream with no end (total 0), diagonal hatching scrolling to the right.
+/// `phase` (s) accumulates the frame times.
+pub fn progress_bar(cv: &mut Canvas, (x, y, w, h): (i32, i32, i32, i32), inset: i32,
+                    elapsed: u32, total: u32, phase: f32) {
+    cv.rect(x, y, w, h, false, 15);
+    let (ix, iy, iw, ih) = (x + 1 + inset, y + 1 + inset, w - 2 - 2 * inset, h - 2 - 2 * inset);
+    if total > 0 {
+        let pw = (elapsed.min(total) as i64 * iw as i64 / total as i64) as i32;
+        if pw > 0 {
+            cv.rect(ix, iy, pw, ih, true, 15);
+        }
+        return;
+    }
+    // Stripes as wide as the bar is tall, as wide again apart
+    let period = 2 * ih.max(2);
+    let shift = (phase * HATCH_SPEED) as i32;
+    for r in 0..ih {
+        for c in 0..iw {
+            if (c + r - shift).rem_euclid(period) < period / 2 {
+                cv.pixel(ix + c, iy + r, 15);
+            }
+        }
+    }
+}
+
+/// Radio set shown with a stream: antenna, speaker grille, dial and knobs;
+/// '#' lit, '+' half grey (smoothing and grille on the greyscale panel).
+const RADIO_ICON_SMALL: [&str; 10] = [
+    "...........#....",
+    "..........#.....",
+    ".##############.",
+    "#..............#",
+    "#.#.#.#..####..#",
+    "#..#.#...#..#..#",
+    "#.#.#.#..####..#",
+    "#..#.#.........#",
+    "#.#.#.#..#..#..#",
+    ".##############.",
+];
+
+const RADIO_ICON_LARGE: [&str; 20] = [
+    "..........................+#....",
+    ".........................#.+....",
+    "........................#.......",
+    ".......................#........",
+    "......................#.........",
+    ".+############################+.",
+    "+#............................#+",
+    "#......#####...................#",
+    "#.....#.+.+.#.....###########..#",
+    "#....#.+.+.+.#....#.+.+#+.+.#..#",
+    "#...#.+.+.+.+.#...#....#....#..#",
+    "#...#+.+.+.+.+#...#....#....#..#",
+    "#...#.+.+.+.+.#...###########..#",
+    "#...#+.+.+.+.+#................#",
+    "#...#.+.+.+.+.#....+#+...+#+...#",
+    "#....#.+.+.+.#.....###...###...#",
+    "#.....#.+.+.#......+#+...+#+...#",
+    "#......#####...................#",
+    "+#............................#+",
+    ".+############################+.",
+];
+
+/// The radio icon, top-left at (x, y): 16x10 (mono panel) or 32x20.
+pub fn radio_icon(cv: &mut Canvas, x: i32, y: i32, large: bool) {
+    let rows: &[&str] = if large { &RADIO_ICON_LARGE } else { &RADIO_ICON_SMALL };
+    for (r, line) in rows.iter().enumerate() {
+        for (c, b) in line.bytes().enumerate() {
+            let level = match b {
+                b'#' => 15,
+                b'+' => 8,
+                _ => continue,
+            };
+            cv.pixel(x + c as i32, y + r as i32, level);
+        }
+    }
+}
+
+/// "mm:ss / mm:ss", or "mm:ss / LIVE" for a stream with no end.
+pub fn time_text(elapsed: u32, total: u32) -> String {
+    let total = if total > 0 { format!("{:02}:{:02}", total / 60, total % 60) } else { "LIVE".into() };
+    format!("{:02}:{:02} / {total}", elapsed / 60, elapsed % 60)
 }
 
 /// Look of the volume bar on one panel family.
